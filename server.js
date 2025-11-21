@@ -168,7 +168,14 @@ app.post('/api/swings/:id/feeling', authMiddleware, (req, res) => {
     ...feelingsMap[id],
   });
 });
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', message: 'INSWING API is running' });
+});
 
+// 옵션: 혹시 나중에 직접 4000 포트로 테스트할 때를 대비해서
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'INSWING API is running (api path)' });
+});
 // 업로드된 파일 서빙 (테스트용)
 // 실제 프로덕션에서는 Nginx나 S3를 통해 제공하는 게 안전함
 app.use('/uploads', express.static(UPLOAD_DIR));
