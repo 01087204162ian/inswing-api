@@ -35,7 +35,7 @@ const PORT = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 // 로그인 API
-app.post('/api/auth/login', (req, res) => {
+app.post('/auth/login', (req, res) => {
   try {
     const { email } = req.body;
     
@@ -116,7 +116,7 @@ function generateFakeMetrics() {
 }
 
 // 1) 스윙 업로드 + 분석 (가짜 메트릭)
-app.post('/api/swings', authMiddleware, upload.single('video'), (req, res) => {
+app.post('/swings', authMiddleware, upload.single('video'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'video file is required' });
@@ -156,7 +156,7 @@ app.post('/api/swings', authMiddleware, upload.single('video'), (req, res) => {
 });
 
 // 2) 스윙 단건 조회
-app.get('/api/swings/:id', authMiddleware, (req, res) => {
+app.get('/swings/:id', authMiddleware, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const swing = swings.find((s) => s.id === id && s.user_id === req.user.id);
   if (!swing) {
@@ -174,7 +174,7 @@ app.get('/api/swings/:id', authMiddleware, (req, res) => {
 });
 
 // 3) 히스토리 리스트 조회
-app.get('/api/swings', authMiddleware, (req, res) => {
+app.get('/swings', authMiddleware, (req, res) => {
   const userSwings = swings.filter((s) => s.user_id === req.user.id);
   const items = userSwings.map((s) => ({
     id: s.id,
@@ -193,7 +193,7 @@ app.get('/api/swings', authMiddleware, (req, res) => {
 });
 
 // 4) 스윙 느낌 저장
-app.post('/api/swings/:id/feeling', authMiddleware, (req, res) => {
+app.post('/swings/:id/feeling', authMiddleware, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const swing = swings.find((s) => s.id === id && s.user_id === req.user.id);
   if (!swing) {
@@ -221,7 +221,7 @@ app.get('/health', (req, res) => {
 });
 
 // 옵션: 혹시 나중에 직접 4000 포트로 테스트할 때를 대비해서
-app.get('/api/health', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'INSWING API is running (api path)' });
 });
 // 업로드된 파일 서빙 (테스트용)
