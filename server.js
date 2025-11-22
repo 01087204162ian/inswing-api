@@ -183,6 +183,7 @@ app.get('/swings/:id', authMiddleware, async (req, res) => {
 });
 
 // 3) 히스토리 리스트 조회
+// 3) 히스토리 리스트 조회
 app.get('/swings', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -190,9 +191,11 @@ app.get('/swings', authMiddleware, async (req, res) => {
     const [rows] = await db.query(`
       SELECT 
         s.id, s.video_url, s.club_type, s.shot_side, s.created_at,
-        m.backswing_angle, m.impact_speed, m.follow_through_angle, m.balance_score
+        m.backswing_angle, m.impact_speed, m.follow_through_angle, m.balance_score,
+        f.feeling_code, f.note
       FROM swings s
       LEFT JOIN metrics m ON s.id = m.swing_id
+      LEFT JOIN feelings f ON s.id = f.swing_id
       WHERE s.user_id = ?
       ORDER BY s.created_at DESC
     `, [userId]);
@@ -208,7 +211,11 @@ app.get('/swings', authMiddleware, async (req, res) => {
         impact_speed: row.impact_speed,
         follow_through_angle: row.follow_through_angle,
         balance_score: row.balance_score
-      }
+      },
+      feeling: row.feeling_code ? {
+        feeling_code: row.feeling_code,
+        note: row.note
+      } : null
     }));
 
     return res.json({ ok: true, swings });
