@@ -80,7 +80,7 @@ app.post('/swings', authMiddleware, upload.single('video'), async (req, res) => 
   try {
     const userId = req.user.id;
     const { club_type, shot_side } = req.body;
-    const videoPath = req.file ? `/uploads/${req.file.filename}` : null;
+    const videoPath = req.file ? `https://api.inswing.ai/uploads/${req.file.filename}` : null;
 
     if (!videoPath) {
       return res.status(400).json({ error: 'No video uploaded' });
