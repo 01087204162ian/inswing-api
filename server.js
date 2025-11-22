@@ -4,7 +4,10 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
 
+// JWT Secret (실제 운영에서는 환경변수로 관리)
+const JWT_SECRET = 'inswing-secret-key-2025'; // TODO: 환경변수로 변경
 // 업로드 파일을 저장할 로컬 폴더 (임시용)
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -31,26 +34,71 @@ const PORT = process.env.PORT || 4000;
 // CORS 허용 (프론트에서 호출 가능하도록)
 app.use(cors());
 app.use(express.json());
+// 로그인 API
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
 
+    // 간단한 이메일 검증
+    if (!email.includes('@')) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    // 임시: 이메일을 user_id로 해싱 (실제로는 DB 조회)
+    const userId = Math.abs(
+      email.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
+    ) % 10000;
+
+    // JWT 토큰 발급
+    const token = jwt.sign(
+      { 
+        userId, 
+        email 
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' } // 7일 유효
+    );
+
+    return res.json({
+      ok: true,
+      token,
+      user: { id: userId, email }
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Login failed' });
+  }
+});
 // 메모리 상에 스윙 데이터 저장 (임시 DB 역할)
 let swings = [];       // { id, user_id, created_at, video_url, club_type, shot_side }
 let metricsMap = {};   // swing_id -> { rotation_efficiency, ... }
 let feelingsMap = {};  // swing_id -> { feeling_code, note }
 
-// 토큰 확인 (지금은 형식만 체크, 실제 검증X)
+// 토큰 확인 - JWT 검증으로 변경
 function authMiddleware(req, res, next) {
   const auth = req.headers['authorization'] || '';
   if (!auth.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  
   const token = auth.substring('Bearer '.length).trim();
   if (!token) {
     return res.status(401).json({ error: 'Invalid token' });
   }
-  // TODO: 나중에 실제 JWT 검증 로직 추가
-  // 일단은 user_id=1 로 고정해서 사용
-  req.user = { id: 1 };
-  next();
+
+  try {
+    // JWT 검증
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.userId, email: decoded.email };
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
 }
 
 // 헬퍼: 가짜 AI 분석 결과 만들기
