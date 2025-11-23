@@ -1,19 +1,163 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const jwt = require('jsonwebtoken');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const KakaoStrategy = require('passport-kakao').Strategy;
+const session = require('express-session');
 const db = require('./db');
+const axios = require('axios');
+const FormData = require('form-data');
+const fs = require('fs');
+
+// AWS SDK
+const { S3Client } = require('@aws-sdk/client-s3');
+const { Upload } = require('@aws-sdk/lib-storage');
 
 const app = express();
 const PORT = 4000;
-const JWT_SECRET = 'inswing-secret-key-2025';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// S3 클라이언트 설정
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// 파일 업로드 설정
+// 세션 설정
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false }
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+// ===== OAuth Strategies =====
+
+// Google OAuth Strategy
+passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: process.env.GOOGLE_CALLBACK_URL
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile.emails[0].value;
+      const googleId = profile.id;
+      const name = profile.displayName;
+
+      const [rows] = await db.query(
+        'SELECT id, email FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+        ['google', googleId]
+      );
+
+      let userId;
+      if (rows.length > 0) {
+        userId = rows[0].id;
+      } else {
+        const [emailRows] = await db.query(
+          'SELECT id FROM users WHERE email = ?',
+          [email]
+        );
+
+        if (emailRows.length > 0) {
+          userId = emailRows[0].id;
+          await db.query(
+            'UPDATE users SET oauth_provider = ?, oauth_id = ?, name = ? WHERE id = ?',
+            ['google', googleId, name, userId]
+          );
+        } else {
+          const [result] = await db.query(
+            'INSERT INTO users (email, oauth_provider, oauth_id, name) VALUES (?, ?, ?, ?)',
+            [email, 'google', googleId, name]
+          );
+          userId = result.insertId;
+        }
+      }
+
+      return done(null, { id: userId, email, name });
+    } catch (err) {
+      console.error('Google OAuth error:', err);
+      return done(err);
+    }
+  }
+));
+
+// Kakao OAuth Strategy
+passport.use(new KakaoStrategy({
+    clientID: process.env.KAKAO_CLIENT_ID,
+    clientSecret: process.env.KAKAO_CLIENT_SECRET,
+    callbackURL: process.env.KAKAO_CALLBACK_URL
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile._json.kakao_account?.email;
+      const kakaoId = profile.id;
+      const name = profile.displayName || profile._json.kakao_account?.profile?.nickname;
+
+      const userEmail = email || `kakao_${kakaoId}@inswing.temp`;
+
+      const [rows] = await db.query(
+        'SELECT id, email FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+        ['kakao', kakaoId]
+      );
+
+      let userId;
+      if (rows.length > 0) {
+        userId = rows[0].id;
+      } else {
+        const [emailRows] = await db.query(
+          'SELECT id FROM users WHERE email = ?',
+          [userEmail]
+        );
+
+        if (emailRows.length > 0) {
+          userId = emailRows[0].id;
+          await db.query(
+            'UPDATE users SET oauth_provider = ?, oauth_id = ?, name = ? WHERE id = ?',
+            ['kakao', kakaoId, name, userId]
+          );
+        } else {
+          const [result] = await db.query(
+            'INSERT INTO users (email, oauth_provider, oauth_id, name) VALUES (?, ?, ?, ?)',
+            [userEmail, 'kakao', kakaoId, name]
+          );
+          userId = result.insertId;
+        }
+      }
+
+      return done(null, { id: userId, email: userEmail, name });
+    } catch (err) {
+      console.error('Kakao OAuth error:', err);
+      return done(err);
+    }
+  }
+));
+
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((user, done) => {
+  done(null, user);
+});
+
+// ===== File Upload =====
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
   filename: (req, file, cb) => {
@@ -23,7 +167,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// 인증 미들웨어
+// ===== Auth Middleware =====
+
 function authMiddleware(req, res, next) {
   const auth = req.headers['authorization'] || '';
   if (!auth.startsWith('Bearer ')) {
@@ -44,7 +189,47 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 로그인 API
+// ===== OAuth Routes =====
+
+// Google 로그인 시작
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+// Google 콜백
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: 'https://inswing.ai/app/login.html' }),
+  (req, res) => {
+    const token = jwt.sign(
+      { userId: req.user.id, email: req.user.email },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.redirect(`https://inswing.ai/app/login.html?token=${token}`);
+  }
+);
+
+// Kakao 로그인 시작
+app.get('/auth/kakao',
+  passport.authenticate('kakao')
+);
+
+// Kakao 콜백
+app.get('/auth/kakao/callback',
+  passport.authenticate('kakao', { failureRedirect: 'https://inswing.ai/app/login.html' }),
+  (req, res) => {
+    const token = jwt.sign(
+      { userId: req.user.id, email: req.user.email },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.redirect(`https://inswing.ai/app/login.html?token=${token}`);
+  }
+);
+
+// ===== API Routes =====
+
+// 이메일 로그인
 app.post('/auth/login', async (req, res) => {
   try {
     const { email } = req.body;
@@ -53,7 +238,6 @@ app.post('/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email' });
     }
 
-    // 사용자 조회 또는 생성
     const [rows] = await db.query('SELECT id, email FROM users WHERE email = ?', [email]);
     
     let userId;
@@ -64,7 +248,6 @@ app.post('/auth/login', async (req, res) => {
       userId = result.insertId;
     }
 
-    // JWT 발급
     const token = jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '7d' });
 
     return res.json({ ok: true, token, user: { id: userId, email } });
@@ -75,38 +258,84 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-// 1) 스윙 업로드 + AI 분석
+// 1) 스윙 업로드 + AI 분석 + S3 저장
 app.post('/swings', authMiddleware, upload.single('video'), async (req, res) => {
   try {
     const userId = req.user.id;
     const { club_type, shot_side } = req.body;
-    const videoPath = req.file ? `https://api.inswing.ai/uploads/${req.file.filename}` : null;
 
-    if (!videoPath) {
+    if (!req.file) {
       return res.status(400).json({ error: 'No video uploaded' });
     }
 
-    // 트랜잭션 시작
     const connection = await db.getConnection();
     await connection.beginTransaction();
 
     try {
-      // swings 테이블 삽입
+      // 1단계: AI 분석 (로컬 파일 사용)
+      let metrics;
+      try {
+        const formData = new FormData();
+        formData.append('video', fs.createReadStream(req.file.path));
+
+        const aiResponse = await axios.post('http://localhost:5000/analyze', formData, {
+          headers: formData.getHeaders(),
+          timeout: 30000
+        });
+
+        if (aiResponse.data.ok) {
+          const analysis = aiResponse.data.analysis;
+          metrics = {
+            backswing_angle: analysis.backswing_angle,
+            impact_speed: analysis.impact_speed,
+            follow_through_angle: analysis.follow_through_angle,
+            balance_score: analysis.balance_score
+          };
+        } else {
+          throw new Error('AI analysis failed');
+        }
+      } catch (aiError) {
+        console.error('AI 분석 에러:', aiError.message);
+        // AI 실패 시 더미 데이터 사용
+        metrics = {
+          backswing_angle: (Math.random() * 30 + 70).toFixed(2),
+          impact_speed: (Math.random() * 20 + 90).toFixed(2),
+          follow_through_angle: (Math.random() * 40 + 110).toFixed(2),
+          balance_score: (Math.random() * 0.3 + 0.7).toFixed(2)
+        };
+      }
+
+      // 2단계: S3 업로드
+      const fileStream = fs.createReadStream(req.file.path);
+      const s3Key = `videos/${Date.now()}-${req.file.originalname}`;
+      
+      const uploadParams = {
+        Bucket: process.env.AWS_S3_BUCKET,
+        Key: s3Key,
+        Body: fileStream,
+        ContentType: req.file.mimetype
+      };
+
+      const s3Upload = new Upload({
+        client: s3Client,
+        params: uploadParams
+      });
+
+      await s3Upload.done();
+
+      // CloudFront URL 생성
+      const videoUrl = `https://${process.env.CLOUDFRONT_DOMAIN}/${s3Key}`;
+
+      // 3단계: 로컬 파일 삭제
+      fs.unlinkSync(req.file.path);
+
+      // 4단계: DB 저장
       const [swingResult] = await connection.query(
         'INSERT INTO swings (user_id, video_url, club_type, shot_side) VALUES (?, ?, ?, ?)',
-        [userId, videoPath, club_type, shot_side]
+        [userId, videoUrl, club_type, shot_side]
       );
       const swingId = swingResult.insertId;
 
-      // 가짜 AI 분석 결과
-      const metrics = {
-        backswing_angle: (Math.random() * 30 + 70).toFixed(2),
-        impact_speed: (Math.random() * 20 + 90).toFixed(2),
-        follow_through_angle: (Math.random() * 40 + 110).toFixed(2),
-        balance_score: (Math.random() * 0.3 + 0.7).toFixed(2)
-      };
-
-      // metrics 테이블 삽입
       await connection.query(
         'INSERT INTO metrics (swing_id, backswing_angle, impact_speed, follow_through_angle, balance_score) VALUES (?, ?, ?, ?, ?)',
         [swingId, metrics.backswing_angle, metrics.impact_speed, metrics.follow_through_angle, metrics.balance_score]
@@ -116,12 +345,16 @@ app.post('/swings', authMiddleware, upload.single('video'), async (req, res) => 
 
       return res.json({
         ok: true,
-        swing: { id: swingId, video_url: videoPath, club_type, shot_side },
+        swing: { id: swingId, video_url: videoUrl, club_type, shot_side },
         metrics
       });
 
     } catch (err) {
       await connection.rollback();
+      // 에러 시 로컬 파일 삭제
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
       throw err;
     } finally {
       connection.release();
@@ -183,7 +416,6 @@ app.get('/swings/:id', authMiddleware, async (req, res) => {
 });
 
 // 3) 히스토리 리스트 조회
-// 3) 히스토리 리스트 조회
 app.get('/swings', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -233,13 +465,11 @@ app.post('/swings/:id/feeling', authMiddleware, async (req, res) => {
     const userId = req.user.id;
     const { feeling_code, note } = req.body;
 
-    // 스윙 소유 확인
     const [swing] = await db.query('SELECT id FROM swings WHERE id = ? AND user_id = ?', [swingId, userId]);
     if (swing.length === 0) {
       return res.status(404).json({ error: 'Swing not found' });
     }
 
-    // INSERT or UPDATE
     await db.query(`
       INSERT INTO feelings (swing_id, feeling_code, note)
       VALUES (?, ?, ?)
