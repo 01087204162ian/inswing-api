@@ -305,7 +305,7 @@ app.post(
             formData,
             {
               headers: formData.getHeaders(),
-              timeout: 30000
+              timeout: 90000
             }
           );
 
