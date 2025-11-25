@@ -49,8 +49,7 @@ app.use(passport.session());
 // ===== OAuth Strategies =====
 
 // Google OAuth Strategy
-passport.use(new GoogleStrategy(
-  {
+passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     callbackURL: process.env.GOOGLE_CALLBACK_URL
@@ -99,8 +98,7 @@ passport.use(new GoogleStrategy(
 ));
 
 // Kakao OAuth Strategy
-passport.use(new KakaoStrategy(
-  {
+passport.use(new KakaoStrategy({
     clientID: process.env.KAKAO_CLIENT_ID,
     clientSecret: process.env.KAKAO_CLIENT_SECRET,
     callbackURL: process.env.KAKAO_CALLBACK_URL
@@ -109,8 +107,7 @@ passport.use(new KakaoStrategy(
     try {
       const email = profile._json.kakao_account?.email;
       const kakaoId = profile.id;
-      const name =
-        profile.displayName || profile._json.kakao_account?.profile?.nickname;
+      const name = profile.displayName || profile._json.kakao_account?.profile?.nickname;
 
       const userEmail = email || `kakao_${kakaoId}@inswing.temp`;
 
@@ -164,11 +161,7 @@ passport.deserializeUser((user, done) => {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
   filename: (req, file, cb) => {
-    const uniqueName =
-      Date.now() +
-      '-' +
-      Math.round(Math.random() * 1e9) +
-      path.extname(file.originalname);
+    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
     cb(null, uniqueName);
   }
 });
@@ -204,11 +197,8 @@ app.get('/auth/google',
 );
 
 // Google 콜백
-app.get(
-  '/auth/google/callback',
-  passport.authenticate('google', {
-    failureRedirect: 'https://inswing.ai/app/login.html'
-  }),
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: 'https://inswing.ai/app/login.html' }),
   (req, res) => {
     const token = jwt.sign(
       { userId: req.user.id, email: req.user.email },
@@ -220,14 +210,13 @@ app.get(
 );
 
 // Kakao 로그인 시작
-app.get('/auth/kakao', passport.authenticate('kakao'));
+app.get('/auth/kakao',
+  passport.authenticate('kakao')
+);
 
 // Kakao 콜백
-app.get(
-  '/auth/kakao/callback',
-  passport.authenticate('kakao', {
-    failureRedirect: 'https://inswing.ai/app/login.html'
-  }),
+app.get('/auth/kakao/callback',
+  passport.authenticate('kakao', { failureRedirect: 'https://inswing.ai/app/login.html' }),
   (req, res) => {
     const token = jwt.sign(
       { userId: req.user.id, email: req.user.email },
@@ -249,27 +238,20 @@ app.post('/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email' });
     }
 
-    const [rows] = await db.query(
-      'SELECT id, email FROM users WHERE email = ?',
-      [email]
-    );
+    const [rows] = await db.query('SELECT id, email FROM users WHERE email = ?', [email]);
 
     let userId;
     if (rows.length > 0) {
       userId = rows[0].id;
     } else {
-      const [result] = await db.query(
-        'INSERT INTO users (email) VALUES (?)',
-        [email]
-      );
+      const [result] = await db.query('INSERT INTO users (email) VALUES (?)', [email]);
       userId = result.insertId;
     }
 
-    const token = jwt.sign({ userId, email }, JWT_SECRET, {
-      expiresIn: '7d'
-    });
+    const token = jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '7d' });
 
     return res.json({ ok: true, token, user: { id: userId, email } });
+
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Login failed' });
@@ -277,65 +259,53 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // 1) 스윙 업로드 + AI 분석 + S3 저장
-app.post(
-  '/swings',
-  authMiddleware,
-  upload.single('video'),
-  async (req, res) => {
+app.post('/swings', authMiddleware, upload.single('video'), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { club_type, shot_side } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No video uploaded' });
+    }
+
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+
     try {
-      const userId = req.user.id;
-      const { club_type, shot_side } = req.body;
-
-      if (!req.file) {
-        return res.status(400).json({ error: 'No video uploaded' });
-      }
-
-      const connection = await db.getConnection();
-      await connection.beginTransaction();
+      // 1단계: AI 분석 (로컬 파일 사용)
+      let metrics;
 
       try {
-        // 1단계: AI 분석 (로컬 파일 사용)
-        let metrics;
-        try {
-          const formData = new FormData();
-          formData.append('video', fs.createReadStream(req.file.path));
+        const formData = new FormData();
+        formData.append('video', fs.createReadStream(req.file.path));
 
-          const aiResponse = await axios.post(
-            'http://localhost:5000/analyze',
-            formData,
-            {
-              headers: formData.getHeaders(),
-              timeout: 90000
-            }
-          );
+        const aiResponse = await axios.post('http://localhost:5000/analyze', formData, {
+          headers: formData.getHeaders(),
+          timeout: 900000 // 9000초(15분) 같은 충분한 값으로 이미 조정한 상태라고 가정
+        });
 
-          if (aiResponse.data.ok) {
-            const analysis = aiResponse.data.analysis;
+        if (aiResponse.data && aiResponse.data.ok) {
+          const analysis = aiResponse.data.analysis || {};
 
-            // 🔥 v2 메트릭까지 모두 수집
-            metrics = {
-              backswing_angle: analysis.backswing_angle,
-              impact_speed: analysis.impact_speed,
-              follow_through_angle: analysis.follow_through_angle,
-              balance_score: analysis.balance_score,
+          metrics = {
+            backswing_angle: analysis.backswing_angle,
+            impact_speed: analysis.impact_speed,
+            follow_through_angle: analysis.follow_through_angle,
+            balance_score: analysis.balance_score,
 
-              tempo_ratio: analysis.tempo_ratio ?? null,
-              backswing_time_sec: analysis.backswing_time_sec ?? null,
-              downswing_time_sec: analysis.downswing_time_sec ?? null,
-              head_movement_pct: analysis.head_movement_pct ?? null,
-              shoulder_rotation_range: analysis.shoulder_rotation_range ?? null,
-              hip_rotation_range: analysis.hip_rotation_range ?? null,
-              rotation_efficiency: analysis.rotation_efficiency ?? null,
-              overall_score: analysis.overall_score ?? null
-            };
-          } else {
-            console.error('AI 분석 에러: ok=false');
-            throw new Error('AI analysis failed');
-          }
-        } catch (aiError) {
-          console.error('AI 분석 에러:', aiError.message);
-
-          // AI 실패 시 더미 데이터 (확장 필드는 null)
+            // v2 확장 필드들 (없으면 null)
+            tempo_ratio: analysis.tempo_ratio ?? null,
+            backswing_time_sec: analysis.backswing_time_sec ?? null,
+            downswing_time_sec: analysis.downswing_time_sec ?? null,
+            head_movement_pct: analysis.head_movement_pct ?? null,
+            shoulder_rotation_range: analysis.shoulder_rotation_range ?? null,
+            hip_rotation_range: analysis.hip_rotation_range ?? null,
+            rotation_efficiency: analysis.rotation_efficiency ?? null,
+            overall_score: analysis.overall_score ?? null
+          };
+        } else {
+          console.error('AI 분석 에러: 응답 ok=false');
+          // AI 실패 시 더미 데이터 (확장 필드는 일단 null)
           metrics = {
             backswing_angle: (Math.random() * 30 + 70).toFixed(2),
             impact_speed: (Math.random() * 20 + 90).toFixed(2),
@@ -352,98 +322,116 @@ app.post(
             overall_score: null
           };
         }
+      } catch (aiError) {
+        console.error('AI 분석 에러:', aiError.message);
+        // AI 실패 시 더미 데이터 사용 (v2 필드는 NULL)
+        metrics = {
+          backswing_angle: (Math.random() * 30 + 70).toFixed(2),
+          impact_speed: (Math.random() * 20 + 90).toFixed(2),
+          follow_through_angle: (Math.random() * 40 + 110).toFixed(2),
+          balance_score: (Math.random() * 0.3 + 0.7).toFixed(2),
 
-        // 2단계: S3 업로드
-        const fileStream = fs.createReadStream(req.file.path);
-        const s3Key = `videos/${Date.now()}-${req.file.originalname}`;
-
-        const uploadParams = {
-          Bucket: process.env.AWS_S3_BUCKET,
-          Key: s3Key,
-          Body: fileStream,
-          ContentType: req.file.mimetype
+          tempo_ratio: null,
+          backswing_time_sec: null,
+          downswing_time_sec: null,
+          head_movement_pct: null,
+          shoulder_rotation_range: null,
+          hip_rotation_range: null,
+          rotation_efficiency: null,
+          overall_score: null
         };
-
-        const s3Upload = new Upload({
-          client: s3Client,
-          params: uploadParams
-        });
-
-        await s3Upload.done();
-
-        // CloudFront URL 생성
-        const videoUrl = `https://${process.env.CLOUDFRONT_DOMAIN}/${s3Key}`;
-
-        // 3단계: 로컬 파일 삭제
-        fs.unlinkSync(req.file.path);
-
-        // 4단계: DB 저장
-        const [swingResult] = await connection.query(
-          'INSERT INTO swings (user_id, video_url, club_type, shot_side) VALUES (?, ?, ?, ?)',
-          [userId, videoUrl, club_type, shot_side]
-        );
-        const swingId = swingResult.insertId;
-
-        // 🔥 v2 메트릭 INSERT
-        await connection.query(
-            `
-            INSERT INTO metrics (
-              swing_id,
-              backswing_angle,
-              impact_speed,
-              follow_through_angle,
-              balance_score,
-              tempo_ratio,
-              backswing_time_sec,
-              downswing_time_sec,
-              head_movement_pct,
-              shoulder_rotation_range,
-              hip_rotation_range,
-              rotation_efficiency,
-              overall_score
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `,
-            [
-              swingId,
-              metrics.backswing_angle,
-              metrics.impact_speed,
-              metrics.follow_through_angle,
-              metrics.balance_score,
-              metrics.tempo_ratio,
-              metrics.backswing_time_sec,
-              metrics.downswing_time_sec,
-              metrics.head_movement_pct,
-              metrics.shoulder_rotation_range,
-              metrics.hip_rotation_range,
-              metrics.rotation_efficiency,
-              metrics.overall_score
-            ]
-          );
-
-
-        await connection.commit();
-
-        return res.json({
-          ok: true,
-          swing: { id: swingId, video_url: videoUrl, club_type, shot_side },
-          metrics
-        });
-      } catch (err) {
-        await connection.rollback();
-        // 에러 시 로컬 파일 삭제
-        if (req.file && fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
-        }
-        throw err;
-      } finally {
-        connection.release();
       }
+
+      // 2단계: S3 업로드
+      const fileStream = fs.createReadStream(req.file.path);
+      const s3Key = `videos/${Date.now()}-${req.file.originalname}`;
+
+      const uploadParams = {
+        Bucket: process.env.AWS_S3_BUCKET,
+        Key: s3Key,
+        Body: fileStream,
+        ContentType: req.file.mimetype
+      };
+
+      const s3Upload = new Upload({
+        client: s3Client,
+        params: uploadParams
+      });
+
+      await s3Upload.done();
+
+      // CloudFront URL 생성
+      const videoUrl = `https://${process.env.CLOUDFRONT_DOMAIN}/${s3Key}`;
+
+      // 3단계: 로컬 파일 삭제
+      fs.unlinkSync(req.file.path);
+
+      // 4단계: DB 저장
+      const [swingResult] = await connection.query(
+        'INSERT INTO swings (user_id, video_url, club_type, shot_side) VALUES (?, ?, ?, ?)',
+        [userId, videoUrl, club_type, shot_side]
+      );
+      const swingId = swingResult.insertId;
+
+      await connection.query(
+        `
+        INSERT INTO metrics (
+          swing_id,
+          backswing_angle,
+          impact_speed,
+          follow_through_angle,
+          balance_score,
+          tempo_ratio,
+          backswing_time_sec,
+          downswing_time_sec,
+          head_movement_pct,
+          shoulder_rotation_range,
+          hip_rotation_range,
+          rotation_efficiency,
+          overall_score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          swingId,
+          metrics.backswing_angle,
+          metrics.impact_speed,
+          metrics.follow_through_angle,
+          metrics.balance_score,
+          metrics.tempo_ratio,
+          metrics.backswing_time_sec,
+          metrics.downswing_time_sec,
+          metrics.head_movement_pct,
+          metrics.shoulder_rotation_range,
+          metrics.hip_rotation_range,
+          metrics.rotation_efficiency,
+          metrics.overall_score
+        ]
+      );
+
+      await connection.commit();
+
+      return res.json({
+        ok: true,
+        swing: { id: swingId, video_url: videoUrl, club_type, shot_side },
+        metrics
+      });
+
     } catch (err) {
-      console.error(err);
-      return res.status(500).json({ error: 'Upload failed' });
+      await connection.rollback();
+      // 에러 시 로컬 파일 삭제
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      throw err;
+    } finally {
+      connection.release();
     }
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Upload failed' });
   }
-);
+});
 
 // 2) 스윙 단건 조회
 app.get('/swings/:id', authMiddleware, async (req, res) => {
@@ -477,7 +465,7 @@ app.get('/swings/:id', authMiddleware, async (req, res) => {
       LEFT JOIN metrics m ON s.id = m.swing_id
       LEFT JOIN feelings f ON s.id = f.swing_id
       WHERE s.id = ? AND s.user_id = ?
-    `,
+      `,
       [swingId, userId]
     );
 
@@ -486,6 +474,7 @@ app.get('/swings/:id', authMiddleware, async (req, res) => {
     }
 
     const swing = rows[0];
+
     return res.json({
       ok: true,
       swing: {
@@ -509,13 +498,12 @@ app.get('/swings/:id', authMiddleware, async (req, res) => {
         rotation_efficiency: swing.rotation_efficiency,
         overall_score: swing.overall_score
       },
-      feeling: swing.feeling_code
-        ? {
-            feeling_code: swing.feeling_code,
-            note: swing.note
-          }
-        : null
+      feeling: swing.feeling_code ? {
+        feeling_code: swing.feeling_code,
+        note: swing.note
+      } : null
     });
+
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Query failed' });
@@ -554,7 +542,7 @@ app.get('/swings', authMiddleware, async (req, res) => {
       LEFT JOIN feelings f ON s.id = f.swing_id
       WHERE s.user_id = ?
       ORDER BY s.created_at DESC
-    `,
+      `,
       [userId]
     );
 
@@ -578,15 +566,14 @@ app.get('/swings', authMiddleware, async (req, res) => {
         rotation_efficiency: row.rotation_efficiency,
         overall_score: row.overall_score
       },
-      feeling: row.feeling_code
-        ? {
-            feeling_code: row.feeling_code,
-            note: row.note
-          }
-        : null
+      feeling: row.feeling_code ? {
+        feeling_code: row.feeling_code,
+        note: row.note
+      } : null
     }));
 
     return res.json({ ok: true, swings });
+
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Query failed' });
@@ -617,9 +604,7 @@ app.post('/swings/:id/feeling', authMiddleware, async (req, res) => {
 
     // 3) note는 선택사항 → 공백이면 NULL로 저장
     const cleanedNote =
-      typeof note === 'string' && note.trim() !== ''
-        ? note.trim()
-        : null;
+      typeof note === 'string' && note.trim() !== '' ? note.trim() : null;
 
     // 4) 느낌 upsert
     await db.query(
