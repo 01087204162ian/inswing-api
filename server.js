@@ -386,39 +386,40 @@ app.post(
 
         // 🔥 v2 메트릭 INSERT
         await connection.query(
-          `
-          INSERT INTO metrics (
-            swing_id,
-            backswing_angle,
-            impact_speed,
-            follow_through_angle,
-            balance_score,
-            tempo_ratio,
-            backswing_time_sec,
-            downswing_time_sec,
-            head_movement_pct,
-            shoulder_rotation_range,
-            hip_rotation_range,
-            rotation_efficiency,
-            overall_score
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-          [
-            swingId,
-            metrics.backswing_angle,
-            metrics.impact_speed,
-            metrics.follow_through_angle,
-            metrics.balance_score,
-            metrics.tempo_ratio,
-            metrics.backswing_time_sec,
-            metrics.downswing_time_sec,
-            metrics.head_movement_pct,
-            metrics.shoulder_rotation_range,
-            metrics.hip_rotation_range,
-            metrics.rotation_efficiency,
-            metrics.overall_score
-          ]
-        );
+            `
+            INSERT INTO metrics (
+              swing_id,
+              backswing_angle,
+              impact_speed,
+              follow_through_angle,
+              balance_score,
+              tempo_ratio,
+              backswing_time_sec,
+              downswing_time_sec,
+              head_movement_pct,
+              shoulder_rotation_range,
+              hip_rotation_range,
+              rotation_efficiency,
+              overall_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+            [
+              swingId,
+              metrics.backswing_angle,
+              metrics.impact_speed,
+              metrics.follow_through_angle,
+              metrics.balance_score,
+              metrics.tempo_ratio,
+              metrics.backswing_time_sec,
+              metrics.downswing_time_sec,
+              metrics.head_movement_pct,
+              metrics.shoulder_rotation_range,
+              metrics.hip_rotation_range,
+              metrics.rotation_efficiency,
+              metrics.overall_score
+            ]
+          );
+
 
         await connection.commit();
 
