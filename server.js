@@ -31,6 +31,7 @@ const s3Client = new S3Client({
   }
 });
 
+// CORS 설정 (간단 / 안정 버전)
 const allowedOrigins = [
   'https://inswing.ai',
   'https://www.inswing.ai',
@@ -38,20 +39,16 @@ const allowedOrigins = [
   'http://localhost:3000',
 ];
 
-const corsOptions = {
-  origin(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    console.warn('CORS 차단 origin:', origin);
-    return callback(new Error('Not allowed by CORS'));
-  },
+app.use(cors({
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-};
+}));
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// preflight(OPTIONS) 요청 처리
+app.options('*', cors());
+
 
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
