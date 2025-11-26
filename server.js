@@ -38,8 +38,7 @@ app.use(cors({
   credentials: true,
 }));
 
-// preflight(OPTIONS) 요청 처리
-//app.options('*', cors());
+
 
 
 app.use(express.json());
