@@ -47,7 +47,7 @@ app.use(cors({
 }));
 
 // preflight(OPTIONS) 요청 처리
-app.options('*', cors());
+//app.options('*', cors());
 
 
 app.use(express.json());
