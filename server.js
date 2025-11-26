@@ -31,16 +31,8 @@ const s3Client = new S3Client({
   }
 });
 
-// CORS 설정 (간단 / 안정 버전)
-const allowedOrigins = [
-  'https://inswing.ai',
-  'https://www.inswing.ai',
-  'http://localhost:4000',
-  'http://localhost:3000',
-];
-
 app.use(cors({
-  origin: allowedOrigins,
+  origin: ['https://inswing.ai', 'https://www.inswing.ai'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
