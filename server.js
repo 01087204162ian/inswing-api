@@ -39,7 +39,7 @@ app.use(cors({
 }));
 
 // preflight(OPTIONS) 요청 처리
-//app.options('*', cors());
+app.options('*', cors());
 
 
 app.use(express.json());
@@ -179,7 +179,14 @@ const upload = multer({ storage });
 
 // ===== Auth Middleware =====
 
+// ===== Auth Middleware =====
+
 function authMiddleware(req, res, next) {
+  // OPTIONS 요청은 인증 체크 없이 통과
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
   const auth = req.headers['authorization'] || '';
   if (!auth.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
