@@ -7,12 +7,12 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // 이메일 로그인
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res, next) => {
   try {
     const { email } = req.body;
 
     if (!email || !email.includes('@')) {
-      return res.status(400).json({ error: 'Invalid email' });
+      return res.status(400).json({ ok: false, error: 'Invalid email' });
     }
 
     const [rows] = await db.query(
@@ -39,13 +39,14 @@ router.post('/login', async (req, res) => {
 
     return res.json({ ok: true, token, user: { id: userId, email } });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Login failed' });
+    err.clientMessage = '로그인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+    return next(err);
   }
 });
 
 // Google 로그인 시작
-router.get('/google',
+router.get(
+  '/google',
   passport.authenticate('google', { scope: ['profile', 'email'] })
 );
 
@@ -87,3 +88,4 @@ router.get(
 );
 
 module.exports = router;
+

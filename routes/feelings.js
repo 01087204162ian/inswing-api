@@ -4,7 +4,7 @@ const db = require('../db');
 const router = express.Router();
 
 // 4) 스윙 느낌 저장
-router.post('/:id/feeling', async (req, res) => {
+router.post('/:id/feeling', async (req, res, next) => {
   try {
     const swingId = req.params.id;
     const userId = req.user.id;
@@ -12,7 +12,7 @@ router.post('/:id/feeling', async (req, res) => {
 
     // 1) feeling_code 필수 검증
     if (!feeling_code || typeof feeling_code !== 'string') {
-      return res.status(400).json({ error: 'feeling_code is required' });
+      return res.status(400).json({ ok: false, error: 'feeling_code is required' });
     }
 
     // 2) 스윙 소유자 확인
@@ -22,7 +22,10 @@ router.post('/:id/feeling', async (req, res) => {
     );
 
     if (swingRows.length === 0) {
-      return res.status(404).json({ error: 'Swing not found' });
+      const error = new Error('Swing not found');
+      error.status = 404;
+      error.clientMessage = '해당 스윙을 찾을 수 없습니다.';
+      return next(error);
     }
 
     // 3) note는 선택사항 → 공백이면 NULL로 저장
@@ -43,8 +46,8 @@ router.post('/:id/feeling', async (req, res) => {
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error('Error saving feeling:', err);
-    return res.status(500).json({ error: 'Save failed' });
+    err.clientMessage = '스윙 느낌을 저장하는 중 오류가 발생했습니다.';
+    return next(err);
   }
 });
 

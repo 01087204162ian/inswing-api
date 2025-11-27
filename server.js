@@ -56,7 +56,7 @@ app.get('/health', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'INSWING API is running' });
 });
-
+app.use(errorHandler);
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`INSWING API server running on http://localhost:${PORT}`);

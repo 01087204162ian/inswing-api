@@ -25,13 +25,13 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // 1) 스윙 업로드 + AI 분석 + S3 저장
-router.post('/', upload.single('video'), async (req, res) => {
+router.post('/', upload.single('video'), async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { club_type, shot_side } = req.body;
 
     if (!req.file) {
-      return res.status(400).json({ error: 'No video uploaded' });
+      return res.status(400).json({ ok: false, error: 'No video uploaded' });
     }
 
     const connection = await db.getConnection();
@@ -197,13 +197,14 @@ router.post('/', upload.single('video'), async (req, res) => {
       connection.release();
     }
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Upload failed' });
+    // 여기서 공통 에러 핸들러로
+    err.clientMessage = '영상 업로드 중 오류가 발생했습니다. 다시 시도해주세요.';
+    return next(err);
   }
 });
 
 // 2) 스윙 단건 조회
-router.get('/:id', async (req, res) => {
+router.get('/:id', async (req, res, next) => {
   try {
     const swingId = req.params.id;
     const userId = req.user.id;
@@ -239,7 +240,10 @@ router.get('/:id', async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'Swing not found' });
+      const error = new Error('Swing not found');
+      error.status = 404;
+      error.clientMessage = '해당 스윙을 찾을 수 없습니다.';
+      return next(error);
     }
 
     const swing = rows[0];
@@ -260,7 +264,8 @@ router.get('/:id', async (req, res) => {
         balance_score: swing.balance_score,
         tempo_ratio: swing.tempo_ratio,
         backswing_time_sec: swing.backswing_time_sec,
-        downswing_time_sec: swing.downnswing_time_sec,
+        // 🔧 오타 수정: downnswing_time_sec → downswing_time_sec
+        downswing_time_sec: swing.downswing_time_sec,
         head_movement_pct: swing.head_movement_pct,
         shoulder_rotation_range: swing.shoulder_rotation_range,
         hip_rotation_range: swing.hip_rotation_range,
@@ -275,13 +280,13 @@ router.get('/:id', async (req, res) => {
         : null
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Query failed' });
+    err.clientMessage = '스윙 정보를 불러오는 중 오류가 발생했습니다.';
+    return next(err);
   }
 });
 
 // 3) 히스토리 리스트 조회
-router.get('/', async (req, res) => {
+router.get('/', async (req, res, next) => {
   try {
     const userId = req.user.id;
 
@@ -346,8 +351,8 @@ router.get('/', async (req, res) => {
 
     return res.json({ ok: true, swings });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Query failed' });
+    err.clientMessage = '스윙 히스토리를 불러오는 중 오류가 발생했습니다.';
+    return next(err);
   }
 });
 
