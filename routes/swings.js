@@ -1,3 +1,4 @@
+const { generateSwingComment } = require('../services/commentService');
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
@@ -204,7 +205,8 @@ router.post('/', upload.single('video'), async (req, res, next) => {
 });
 
 // 2) 스윙 단건 조회
-router.get('/:id', async (req, res, next) => {
+// 2) 스윙 단건 조회
+router.get('/:id', async (req, res) => {
   try {
     const swingId = req.params.id;
     const userId = req.user.id;
@@ -240,13 +242,39 @@ router.get('/:id', async (req, res, next) => {
     );
 
     if (rows.length === 0) {
-      const error = new Error('Swing not found');
-      error.status = 404;
-      error.clientMessage = '해당 스윙을 찾을 수 없습니다.';
-      return next(error);
+      return res.status(404).json({ error: 'Swing not found' });
     }
 
     const swing = rows[0];
+
+    const metrics = {
+      backswing_angle: swing.backswing_angle,
+      impact_speed: swing.impact_speed,
+      follow_through_angle: swing.follow_through_angle,
+      balance_score: swing.balance_score,
+      tempo_ratio: swing.tempo_ratio,
+      backswing_time_sec: swing.backswing_time_sec,
+      downswing_time_sec: swing.downswing_time_sec, // ← 오타 downnswing 수정
+      head_movement_pct: swing.head_movement_pct,
+      shoulder_rotation_range: swing.shoulder_rotation_range,
+      hip_rotation_range: swing.hip_rotation_range,
+      rotation_efficiency: swing.rotation_efficiency,
+      overall_score: swing.overall_score
+    };
+
+    const feeling = swing.feeling_code
+      ? {
+          feeling_code: swing.feeling_code,
+          note: swing.note
+        }
+      : null;
+
+    // 🔥 여기서 코멘트 생성
+    const comment = generateSwingComment(metrics, {
+      feelingCode: feeling?.feeling_code || null,
+      clubType: swing.club_type,
+      shotSide: swing.shot_side
+    });
 
     return res.json({
       ok: true,
@@ -257,33 +285,16 @@ router.get('/:id', async (req, res, next) => {
         shot_side: swing.shot_side,
         created_at: swing.created_at
       },
-      metrics: {
-        backswing_angle: swing.backswing_angle,
-        impact_speed: swing.impact_speed,
-        follow_through_angle: swing.follow_through_angle,
-        balance_score: swing.balance_score,
-        tempo_ratio: swing.tempo_ratio,
-        backswing_time_sec: swing.backswing_time_sec,
-        // 🔧 오타 수정: downnswing_time_sec → downswing_time_sec
-        downswing_time_sec: swing.downswing_time_sec,
-        head_movement_pct: swing.head_movement_pct,
-        shoulder_rotation_range: swing.shoulder_rotation_range,
-        hip_rotation_range: swing.hip_rotation_range,
-        rotation_efficiency: swing.rotation_efficiency,
-        overall_score: swing.overall_score
-      },
-      feeling: swing.feeling_code
-        ? {
-            feeling_code: swing.feeling_code,
-            note: swing.note
-          }
-        : null
+      metrics,
+      feeling,
+      comment   // 👈 프론트로 함께 전달
     });
   } catch (err) {
-    err.clientMessage = '스윙 정보를 불러오는 중 오류가 발생했습니다.';
-    return next(err);
+    console.error(err);
+    return res.status(500).json({ error: 'Query failed' });
   }
 });
+
 
 // 3) 히스토리 리스트 조회
 router.get('/', async (req, res, next) => {
