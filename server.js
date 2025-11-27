@@ -8,6 +8,7 @@ const session = require('express-session');
 const corsMiddleware = require('./config/cors');
 const passport = require('./config/passport');
 const authMiddleware = require('./middlewares/auth');
+const errorHandler = require('./middlewares/errorHandler');
 
 const authRoutes = require('./routes/auth');
 const swingRoutes = require('./routes/swings');
