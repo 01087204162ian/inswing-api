@@ -6,18 +6,12 @@ function pickRandom(arr) {
   return arr[idx];
 }
 
-// 숫자 안전 처리
 function num(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isNaN(n) ? null : n;
 }
 
-/**
- * 스윙 하나에 대해 "사람스러운 코멘트"를 만들어주는 함수
- * @param {object} metrics - DB에서 가져온 metrics row
- * @param {object} options - 향후 확장용 (feeling, club_type 등)
- */
 function generateSwingComment(metrics = {}, options = {}) {
   const comments = [];
 
@@ -28,7 +22,7 @@ function generateSwingComment(metrics = {}, options = {}) {
   const headMove = num(metrics.head_movement_pct);
   const overall = num(metrics.overall_score);
 
-  // 1) 전체 한 줄 요약 (종합 점수 기준)
+  // 1) 전체 한 줄 요약
   if (overall !== null) {
     if (overall >= 85) {
       comments.push(
@@ -57,7 +51,7 @@ function generateSwingComment(metrics = {}, options = {}) {
     }
   }
 
-  // 2) 템포 코멘트
+  // 2) 템포
   if (tempo !== null) {
     if (tempo >= 2.7 && tempo <= 3.3) {
       comments.push(
@@ -86,7 +80,7 @@ function generateSwingComment(metrics = {}, options = {}) {
     }
   }
 
-  // 3) 머리 흔들림 코멘트
+  // 3) 머리 흔들림
   if (headMove !== null) {
     if (headMove <= 8) {
       comments.push(
@@ -115,7 +109,7 @@ function generateSwingComment(metrics = {}, options = {}) {
     }
   }
 
-  // 4) 밸런스 코멘트
+  // 4) 밸런스
   if (balance !== null) {
     if (balance >= 0.9) {
       comments.push(
@@ -144,7 +138,7 @@ function generateSwingComment(metrics = {}, options = {}) {
     }
   }
 
-  // 5) 백스윙/팔로우스루 아크 코멘트 (옵션)
+  // 5) 아크
   if (backswing !== null && follow !== null) {
     if (backswing >= 160 && follow >= 150) {
       comments.push(
@@ -163,7 +157,7 @@ function generateSwingComment(metrics = {}, options = {}) {
     }
   }
 
-  // 옵션: feeling(느낌) 반영 (나중에 더 확장 가능)
+  // 옵션: 느낌 반영
   const feeling = options.feelingCode;
   if (feeling && overall !== null) {
     if (feeling === 'bad' && overall >= 75) {
@@ -181,7 +175,6 @@ function generateSwingComment(metrics = {}, options = {}) {
     return '이번 스윙은 데이터가 다소 부족해서, 단순 지표 위주로만 평가가 가능합니다. 다음 스윙부터는 조금씩 패턴을 더 쌓아볼게요.';
   }
 
-  // 여러 문장을 하나의 코멘트로 합침
   return comments.join(' ');
 }
 

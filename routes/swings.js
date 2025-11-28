@@ -1,4 +1,3 @@
-const { generateSwingComment } = require('../services/commentService');
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
@@ -8,6 +7,7 @@ const FormData = require('form-data');
 
 const db = require('../db');
 const { s3Client, Upload } = require('../config/s3');
+const { generateSwingComment } = require('../services/commentService');
 
 const router = express.Router();
 
@@ -25,6 +25,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+
 // 1) 스윙 업로드 + AI 분석 + S3 저장
 router.post('/', upload.single('video'), async (req, res, next) => {
   try {
@@ -39,9 +40,8 @@ router.post('/', upload.single('video'), async (req, res, next) => {
     await connection.beginTransaction();
 
     try {
-      // 1단계: AI 분석 (로컬 파일 사용)
+      // ==== AI 분석 ====
       let metrics;
-
       try {
         const formData = new FormData();
         formData.append('video', fs.createReadStream(req.file.path));
@@ -49,56 +49,31 @@ router.post('/', upload.single('video'), async (req, res, next) => {
         const aiResponse = await axios.post(
           'http://localhost:5000/analyze',
           formData,
-          {
-            headers: formData.getHeaders(),
-            timeout: 900000 // 15분
-          }
+          { headers: formData.getHeaders(), timeout: 900000 }
         );
 
-        if (aiResponse.data && aiResponse.data.ok) {
-          const analysis = aiResponse.data.analysis || {};
-
-          metrics = {
-            backswing_angle: analysis.backswing_angle,
-            impact_speed: analysis.impact_speed,
-            follow_through_angle: analysis.follow_through_angle,
-            balance_score: analysis.balance_score,
-
-            tempo_ratio: analysis.tempo_ratio ?? null,
-            backswing_time_sec: analysis.backswing_time_sec ?? null,
-            downswing_time_sec: analysis.downswing_time_sec ?? null,
-            head_movement_pct: analysis.head_movement_pct ?? null,
-            shoulder_rotation_range: analysis.shoulder_rotation_range ?? null,
-            hip_rotation_range: analysis.hip_rotation_range ?? null,
-            rotation_efficiency: analysis.rotation_efficiency ?? null,
-            overall_score: analysis.overall_score ?? null
-          };
-        } else {
-          console.error('AI 분석 에러: 응답 ok=false');
-          metrics = {
-            backswing_angle: (Math.random() * 30 + 70).toFixed(2),
-            impact_speed: (Math.random() * 20 + 90).toFixed(2),
-            follow_through_angle: (Math.random() * 40 + 110).toFixed(2),
-            balance_score: (Math.random() * 0.3 + 0.7).toFixed(2),
-
-            tempo_ratio: null,
-            backswing_time_sec: null,
-            downswing_time_sec: null,
-            head_movement_pct: null,
-            shoulder_rotation_range: null,
-            hip_rotation_range: null,
-            rotation_efficiency: null,
-            overall_score: null
-          };
-        }
-      } catch (aiError) {
-        console.error('AI 분석 에러:', aiError.message);
+        const analysis = aiResponse.data?.analysis || {};
+        metrics = {
+          backswing_angle: analysis.backswing_angle,
+          impact_speed: analysis.impact_speed,
+          follow_through_angle: analysis.follow_through_angle,
+          balance_score: analysis.balance_score,
+          tempo_ratio: analysis.tempo_ratio ?? null,
+          backswing_time_sec: analysis.backswing_time_sec ?? null,
+          downswing_time_sec: analysis.downswing_time_sec ?? null,
+          head_movement_pct: analysis.head_movement_pct ?? null,
+          shoulder_rotation_range: analysis.shoulder_rotation_range ?? null,
+          hip_rotation_range: analysis.hip_rotation_range ?? null,
+          rotation_efficiency: analysis.rotation_efficiency ?? null,
+          overall_score: analysis.overall_score ?? null
+        };
+      } catch (err) {
+        console.error('AI 서버 오류, 더미 데이터 사용');
         metrics = {
           backswing_angle: (Math.random() * 30 + 70).toFixed(2),
           impact_speed: (Math.random() * 20 + 90).toFixed(2),
           follow_through_angle: (Math.random() * 40 + 110).toFixed(2),
           balance_score: (Math.random() * 0.3 + 0.7).toFixed(2),
-
           tempo_ratio: null,
           backswing_time_sec: null,
           downswing_time_sec: null,
@@ -110,7 +85,7 @@ router.post('/', upload.single('video'), async (req, res, next) => {
         };
       }
 
-      // 2단계: S3 업로드
+      // ==== S3 업로드 ====
       const fileStream = fs.createReadStream(req.file.path);
       const s3Key = `videos/${Date.now()}-${req.file.originalname}`;
 
@@ -121,26 +96,26 @@ router.post('/', upload.single('video'), async (req, res, next) => {
         ContentType: req.file.mimetype
       };
 
-      const s3Upload = new Upload({
-        client: s3Client,
-        params: uploadParams
-      });
-
+      const s3Upload = new Upload({ client: s3Client, params: uploadParams });
       await s3Upload.done();
-
-      // CloudFront URL 생성
       const videoUrl = `https://${process.env.CLOUDFRONT_DOMAIN}/${s3Key}`;
 
-      // 3단계: 로컬 파일 삭제
-      fs.unlinkSync(req.file.path);
+      fs.unlinkSync(req.file.path); // 로컬 파일 삭제
 
-      // 4단계: DB 저장
+      // ==== 스윙 저장 + 코멘트 생성 ====
+      const aiComment = generateSwingComment(metrics, {
+        feelingCode: null,
+        clubType: club_type,
+        shotSide: shot_side
+      });
+
       const [swingResult] = await connection.query(
-        'INSERT INTO swings (user_id, video_url, club_type, shot_side) VALUES (?, ?, ?, ?)',
-        [userId, videoUrl, club_type, shot_side]
+        'INSERT INTO swings (user_id, video_url, club_type, shot_side, comment) VALUES (?, ?, ?, ?, ?)',
+        [userId, videoUrl, club_type, shot_side, aiComment]
       );
       const swingId = swingResult.insertId;
 
+      // metrics 저장
       await connection.query(
         `
         INSERT INTO metrics (
@@ -184,29 +159,27 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           id: swingId,
           video_url: videoUrl,
           club_type,
-          shot_side
+          shot_side,
+          comment: aiComment
         },
         metrics
       });
     } catch (err) {
       await connection.rollback();
-      if (req.file && fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       throw err;
     } finally {
       connection.release();
     }
   } catch (err) {
-    // 여기서 공통 에러 핸들러로
-    err.clientMessage = '영상 업로드 중 오류가 발생했습니다. 다시 시도해주세요.';
+    err.clientMessage = '영상 업로드 중 오류가 발생했습니다.';
     return next(err);
   }
 });
 
+
 // 2) 스윙 단건 조회
-// 2) 스윙 단건 조회
-router.get('/:id', async (req, res) => {
+router.get('/:id', async (req, res, next) => {
   try {
     const swingId = req.params.id;
     const userId = req.user.id;
@@ -218,6 +191,7 @@ router.get('/:id', async (req, res) => {
         s.video_url,
         s.club_type,
         s.shot_side,
+        s.comment,
         s.created_at,
         m.backswing_angle,
         m.impact_speed,
@@ -242,7 +216,7 @@ router.get('/:id', async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'Swing not found' });
+      return res.status(404).json({ ok: false, error: 'Swing not found' });
     }
 
     const swing = rows[0];
@@ -254,7 +228,7 @@ router.get('/:id', async (req, res) => {
       balance_score: swing.balance_score,
       tempo_ratio: swing.tempo_ratio,
       backswing_time_sec: swing.backswing_time_sec,
-      downswing_time_sec: swing.downswing_time_sec, // ← 오타 downnswing 수정
+      downswing_time_sec: swing.downswing_time_sec,
       head_movement_pct: swing.head_movement_pct,
       shoulder_rotation_range: swing.shoulder_rotation_range,
       hip_rotation_range: swing.hip_rotation_range,
@@ -263,18 +237,18 @@ router.get('/:id', async (req, res) => {
     };
 
     const feeling = swing.feeling_code
-      ? {
-          feeling_code: swing.feeling_code,
-          note: swing.note
-        }
+      ? { feeling_code: swing.feeling_code, note: swing.note }
       : null;
 
-    // 🔥 여기서 코멘트 생성
-    const comment = generateSwingComment(metrics, {
-      feelingCode: feeling?.feeling_code || null,
-      clubType: swing.club_type,
-      shotSide: swing.shot_side
-    });
+    // DB에 코멘트가 있으면 그대로, 없는 경우 다시 생성
+    const comment =
+      swing.comment && swing.comment.trim() !== ''
+        ? swing.comment
+        : generateSwingComment(metrics, {
+            feelingCode: feeling?.feeling_code,
+            clubType: swing.club_type,
+            shotSide: swing.shot_side
+          });
 
     return res.json({
       ok: true,
@@ -283,15 +257,15 @@ router.get('/:id', async (req, res) => {
         video_url: swing.video_url,
         club_type: swing.club_type,
         shot_side: swing.shot_side,
-        created_at: swing.created_at
+        created_at: swing.created_at,
+        comment
       },
       metrics,
-      feeling,
-      comment   // 👈 프론트로 함께 전달
+      feeling
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Query failed' });
+    err.clientMessage = '스윙 정보 조회 오류';
+    return next(err);
   }
 });
 
@@ -304,67 +278,25 @@ router.get('/', async (req, res, next) => {
     const [rows] = await db.query(
       `
       SELECT
-        s.id,
-        s.video_url,
-        s.club_type,
-        s.shot_side,
-        s.created_at,
-        m.backswing_angle,
-        m.impact_speed,
-        m.follow_through_angle,
-        m.balance_score,
-        m.tempo_ratio,
-        m.backswing_time_sec,
-        m.downswing_time_sec,
-        m.head_movement_pct,
-        m.shoulder_rotation_range,
-        m.hip_rotation_range,
-        m.rotation_efficiency,
-        m.overall_score,
-        f.feeling_code,
-        f.note
-      FROM swings s
-      LEFT JOIN metrics m ON s.id = m.swing_id
-      LEFT JOIN feelings f ON s.id = f.swing_id
-      WHERE s.user_id = ?
-      ORDER BY s.created_at DESC
+        id,
+        video_url,
+        club_type,
+        shot_side,
+        comment,
+        created_at
+      FROM swings
+      WHERE user_id = ?
+      ORDER BY created_at DESC
       `,
       [userId]
     );
 
-    const swings = rows.map(row => ({
-      id: row.id,
-      video_url: row.video_url,
-      club_type: row.club_type,
-      shot_side: row.shot_side,
-      created_at: row.created_at,
-      metrics: {
-        backswing_angle: row.backswing_angle,
-        impact_speed: row.impact_speed,
-        follow_through_angle: row.follow_through_angle,
-        balance_score: row.balance_score,
-        tempo_ratio: row.tempo_ratio,
-        backswing_time_sec: row.backswing_time_sec,
-        downswing_time_sec: row.downswing_time_sec,
-        head_movement_pct: row.head_movement_pct,
-        shoulder_rotation_range: row.shoulder_rotation_range,
-        hip_rotation_range: row.hip_rotation_range,
-        rotation_efficiency: row.rotation_efficiency,
-        overall_score: row.overall_score
-      },
-      feeling: row.feeling_code
-        ? {
-            feeling_code: row.feeling_code,
-            note: row.note
-          }
-        : null
-    }));
-
-    return res.json({ ok: true, swings });
+    return res.json({ ok: true, swings: rows });
   } catch (err) {
-    err.clientMessage = '스윙 히스토리를 불러오는 중 오류가 발생했습니다.';
+    err.clientMessage = '스윙 히스토리 조회 오류';
     return next(err);
   }
 });
+
 
 module.exports = router;
