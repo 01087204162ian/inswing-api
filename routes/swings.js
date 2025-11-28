@@ -305,25 +305,71 @@ router.get('/', async (req, res, next) => {
     const [rows] = await db.query(
       `
       SELECT
-        id,
-        video_url,
-        club_type,
-        shot_side,
-        comment,
-        created_at
-      FROM swings
-      WHERE user_id = ?
-      ORDER BY created_at DESC
+        s.id,
+        s.video_url,
+        s.club_type,
+        s.shot_side,
+        s.comment,
+        s.created_at,
+        m.backswing_angle,
+        m.impact_speed,
+        m.follow_through_angle,
+        m.balance_score,
+        m.tempo_ratio,
+        m.backswing_time_sec,
+        m.downswing_time_sec,
+        m.head_movement_pct,
+        m.shoulder_rotation_range,
+        m.hip_rotation_range,
+        m.rotation_efficiency,
+        m.overall_score,
+        f.feeling_code,
+        f.note
+      FROM swings s
+      LEFT JOIN metrics  m ON s.id = m.swing_id
+      LEFT JOIN feelings f ON s.id = f.swing_id
+      WHERE s.user_id = ?
+      ORDER BY s.created_at DESC
       `,
       [userId]
     );
 
-    return res.json({ ok: true, swings: rows });
+    const swings = rows.map(row => ({
+      id: row.id,
+      video_url: row.video_url,
+      club_type: row.club_type,
+      shot_side: row.shot_side,
+      created_at: row.created_at,
+      comment: row.comment,    // 👈 AI 코멘트
+      metrics: {
+        backswing_angle: row.backswing_angle,
+        impact_speed: row.impact_speed,
+        follow_through_angle: row.follow_through_angle,
+        balance_score: row.balance_score,
+        tempo_ratio: row.tempo_ratio,
+        backswing_time_sec: row.backswing_time_sec,
+        downswing_time_sec: row.downswing_time_sec,
+        head_movement_pct: row.head_movement_pct,
+        shoulder_rotation_range: row.shoulder_rotation_range,
+        hip_rotation_range: row.hip_rotation_range,
+        rotation_efficiency: row.rotation_efficiency,
+        overall_score: row.overall_score
+      },
+      feeling: row.feeling_code
+        ? {
+            feeling_code: row.feeling_code,
+            note: row.note
+          }
+        : null
+    }));
+
+    return res.json({ ok: true, swings });
   } catch (err) {
-    err.clientMessage = '스윙 히스토리 조회 오류';
+    err.clientMessage = '스윙 히스토리를 불러오는 중 오류가 발생했습니다.';
     return next(err);
   }
 });
+
 
 
 module.exports = router;
