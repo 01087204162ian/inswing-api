@@ -193,6 +193,7 @@ router.get('/:id', async (req, res, next) => {
         s.club_type,
         s.shot_side,
         s.created_at,
+        s.comment,
         m.backswing_angle,
         m.impact_speed,
         m.follow_through_angle,
@@ -214,7 +215,34 @@ router.get('/:id', async (req, res, next) => {
       `,
       [swingId, userId]
     );
-
+    const swings = rows.map(row => ({
+      id: row.id,
+      video_url: row.video_url,
+      club_type: row.club_type,
+      shot_side: row.shot_side,
+      created_at: row.created_at,
+      comment: row.comment,              // 👈 추가
+      metrics: {
+        backswing_angle: row.backswing_angle,
+        impact_speed: row.impact_speed,
+        follow_through_angle: row.follow_through_angle,
+        balance_score: row.balance_score,
+        tempo_ratio: row.tempo_ratio,
+        backswing_time_sec: row.backswing_time_sec,
+        downswing_time_sec: row.downswing_time_sec,
+        head_movement_pct: row.head_movement_pct,
+        shoulder_rotation_range: row.shoulder_rotation_range,
+        hip_rotation_range: row.hip_rotation_range,
+        rotation_efficiency: row.rotation_efficiency,
+        overall_score: row.overall_score
+      },
+      feeling: row.feeling_code
+        ? {
+            feeling_code: row.feeling_code,
+            note: row.note
+          }
+        : null
+    }));
     if (rows.length === 0) {
       return res.status(404).json({ ok: false, error: 'Swing not found' });
     }
