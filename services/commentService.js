@@ -172,11 +172,15 @@ function generateSwingComment(metrics = {}, options = {}) {
   }
 
   if (comments.length === 0) {
-    return '이번 스윙은 데이터가 다소 부족해서, 단순 지표 위주로만 평가가 가능합니다. 다음 스윙부터는 조금씩 패턴을 더 쌓아볼게요.';
+    comments.push('오늘 스윙은 몸이 조금 굳어 있었던 날일 수 있습니다.');
+    comments.push('백스윙과 다운스윙의 연결만 조금 더 자연스러우면 훨씬 좋아질 수 있어요.');
+    comments.push('긴장하지 말고 평소 리듬대로만 스윙해보면 충분히 좋아질 데이터입니다.');
   }
 
-  return comments.join(' ');
-}
+  // 🔥 항상 랜덤 2~3문장 선택
+  const shuffled = comments.sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, Math.min(3, shuffled.length)).join(' ');
+  }
 
 module.exports = {
   generateSwingComment
