@@ -14,12 +14,14 @@ const authRoutes = require('./routes/auth');
 const swingRoutes = require('./routes/swings');
 const feelingRoutes = require('./routes/feelings');
 
+const routineRoutes = require('./routes/routine');
+
 const app = express();
 const PORT = 4000;
 
 // CORS
 app.use(corsMiddleware);
-
+app.use('/routine', routineRoutes);
 // JSON 파싱
 app.use(express.json());
 
