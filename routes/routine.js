@@ -1,10 +1,213 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
-const auth = require('../middlewares/auth');
+
+// ✅ 프로젝트에 맞게 경로 확인하기
+const db = require('../db');          // 또는 '../db'
+const auth = require('../middlewares/auth'); // auth 미들웨어
 
 const DAYS = 14;
 
+// DB Helper: mysql2 / 커스텀 래퍼 무엇이든 대응하도록 rows 추출
+async function query(sql, params) {
+  const result = await db.query(sql, params);
+  // mysql2/promise: [rows, fields]
+  if (Array.isArray(result) && Array.isArray(result[0])) {
+    return result[0];
+  }
+  // 커스텀 래퍼: rows 바로 반환
+  return result;
+}
+
+// 평균 계산 유틸
+function avg(arr) {
+  const nums = arr.map(Number).filter(n => !Number.isNaN(n));
+  if (!nums.length) return 0;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+// 태그 생성용 규칙
+const weaknessTags = [
+  'head_unstable',
+  'tempo_fast',
+  'tempo_slow',
+  'balance_weak',
+  'finish_weak',
+  'overall_low',
+];
+
+const strengthTags = [
+  'head_stable',
+  'tempo_good',
+  'balance_good',
+  'overall_good',
+];
+
+function buildTagsForSwing(s) {
+  const tags = [];
+  const head = s.head_movement_pct != null ? Number(s.head_movement_pct) : null;
+  const balance = s.balance_score != null ? Number(s.balance_score) : null;
+  const tempo = s.tempo_ratio != null ? Number(s.tempo_ratio) : null;
+  const score = s.overall_score != null ? Number(s.overall_score) : null;
+  const comment = (s.ai_comment || '').toLowerCase();
+
+  // 밸런스
+  if (balance != null && !Number.isNaN(balance)) {
+    if (balance >= 0.97) tags.push('balance_good');
+    else if (balance < 0.9) tags.push('balance_weak');
+  }
+
+  // 머리 흔들림
+  if (head != null && !Number.isNaN(head)) {
+    if (head >= 40) tags.push('head_unstable');
+    else if (head <= 15) tags.push('head_stable');
+  }
+
+  // 템포
+  if (tempo != null && !Number.isNaN(tempo)) {
+    if (tempo < 0.8) tags.push('tempo_fast');
+    else if (tempo > 3.5) tags.push('tempo_slow');
+    else tags.push('tempo_good');
+  }
+
+  // 점수
+  if (score != null && !Number.isNaN(score)) {
+    if (score >= 70) tags.push('overall_good');
+    if (score <= 45) tags.push('overall_low');
+  }
+
+  // 코멘트 기반 간단 태그
+  if (comment.includes('피니시') && comment.includes('아쉽')) {
+    tags.push('finish_weak');
+  }
+  if (comment.includes('비거리')) {
+    tags.push('distance_focus');
+  }
+
+  return tags;
+}
+
+function tagToLabel(tag) {
+  const map = {
+    head_unstable: '머리 고정',
+    head_stable: '머리 안정',
+    tempo_fast: '템포 조금 느리게',
+    tempo_slow: '템포 조금 빠르게',
+    tempo_good: '템포 유지',
+    balance_good: '밸런스 유지',
+    balance_weak: '밸런스 개선',
+    finish_weak: '피니시 끝까지',
+    distance_focus: '비거리 집중',
+    overall_low: '기본 리듬 만들기',
+    overall_good: '현재 리듬 유지',
+  };
+  return map[tag] || tag;
+}
+
+function buildGoalText(topWeak, topStrong) {
+  if (!topWeak.length && !topStrong.length) {
+    return '오늘은 가볍게 리듬만 느끼며 스윙해 보세요.';
+  }
+
+  const weakLabels = topWeak.map(t => tagToLabel(t.tag));
+  if (weakLabels.length >= 2) {
+    return `${weakLabels[0]}와 ${weakLabels[1]}에 집중해 보는 하루를 추천합니다.`;
+  }
+  if (weakLabels.length === 1) {
+    return `${weakLabels[0]}에 집중하면서, 강점은 그대로 유지해 보는 루틴입니다.`;
+  }
+
+  const strongLabels = topStrong.map(t => tagToLabel(t.tag));
+  return `${strongLabels.join(', ')} 강점을 유지하면서 편안하게 스윙해 보세요.`;
+}
+
+function buildPatternSentences({ topWeak, topStrong, total, avgScore, avgHead, avgBalance }) {
+  const list = [];
+
+  if (topStrong.length) {
+    const label = tagToLabel(topStrong[0].tag);
+    list.push(`강점 · ${label} 패턴이 꾸준히 유지되고 있습니다.`);
+  }
+
+  if (topWeak.length) {
+    const label = tagToLabel(topWeak[0].tag);
+    list.push(`약점 · 최근 스윙에서 ${label} 관련 태그가 자주 등장하고 있습니다.`);
+  }
+
+  if (avgHead) {
+    list.push(
+      `머리 흔들림 평균이 약 ${avgHead.toFixed(
+        1,
+      )}% 수준입니다. 오늘은 머리 위치를 한 번 더 의식해 보세요.`,
+    );
+  }
+
+  list.push(
+    `최근 ${DAYS}일 동안 총 ${total}개의 스윙이 기록되었습니다. 점수 변화 추이를 보며 나만의 리듬을 만들어가고 있습니다.`,
+  );
+
+  return list;
+}
+
+function pickBestSwing(swings) {
+  if (!swings.length) return { exists: false };
+
+  // 느낌이 좋은 스윙 우선
+  const preferred = swings.filter(
+    s => s.feeling_code === 'perfect' || s.feeling_code === 'good',
+  );
+  const candidateList = preferred.length ? preferred : swings;
+
+  candidateList.sort((a, b) => {
+    const sa = Number(a.overall_score || 0);
+    const sb = Number(b.overall_score || 0);
+    return sb - sa;
+  });
+
+  const best = candidateList[0];
+
+  const clubNames = {
+    driver: '드라이버',
+    wood: '우드',
+    iron: '아이언',
+    wedge: '웨지',
+    putter: '퍼터',
+  };
+  const sideNames = {
+    front: '정면',
+    side: '측면',
+    back: '후면',
+  };
+
+  const title = `${clubNames[best.club_type] || best.club_type} / ${
+    sideNames[best.shot_side] || best.shot_side
+  } · 점수 ${best.overall_score ?? '-'}점`;
+
+  const date = new Date(best.created_at);
+  const dateText = date.toLocaleString('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  const tags = [];
+  if (best.overall_score >= 70) tags.push('대표 샷');
+  if (best.balance_score >= 0.97) tags.push('밸런스 좋음');
+  if (best.tempo_ratio && best.tempo_ratio >= 2.5 && best.tempo_ratio <= 3.5) {
+    tags.push('템포 안정');
+  }
+
+  return {
+    exists: true,
+    id: best.id,
+    title,
+    date_text: dateText,
+    tags,
+  };
+}
+
+// 🔥 오늘 루틴 API
 router.get('/today', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -12,14 +215,17 @@ router.get('/today', auth, async (req, res) => {
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - DAYS);
 
-    // 최근 14일 스윙 + 메트릭 + 느낌
-    const rows = await db.query(`
+    const rows = await query(
+      `
       SELECT
         s.id,
+        s.user_id,
+        s.video_url,
         s.club_type,
         s.shot_side,
-        s.created_at,
         s.comment AS ai_comment,
+        s.created_at,
+
         m.backswing_angle,
         m.impact_speed,
         m.follow_through_angle,
@@ -32,163 +238,46 @@ router.get('/today', auth, async (req, res) => {
         m.hip_rotation_range,
         m.rotation_efficiency,
         m.overall_score,
+
         f.feeling_code
       FROM swings s
-      LEFT JOIN swing_metrics m ON m.swing_id = s.id
-      LEFT JOIN swing_feelings f ON f.swing_id = s.id
+      LEFT JOIN metrics  m ON m.swing_id = s.id
+      LEFT JOIN feelings f ON f.swing_id = s.id
       WHERE s.user_id = ?
         AND s.created_at >= ?
       ORDER BY s.created_at DESC
-    `, [userId, sinceDate]);
+    `,
+      [userId, sinceDate],
+    );
 
-    // 데이터 없을 때 (첫 이용)
+    // 스윙 데이터가 하나도 없을 때
     if (!rows.length) {
+      const now = new Date();
+      const date_text =
+        now.toLocaleDateString('ko-KR', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        }) + ' · 루틴 첫 시작';
+
       return res.json({
         ok: true,
-        date_text: '오늘 · 루틴 첫 시작',
+        date_text,
         goal_text: '먼저 스윙을 1개 이상 업로드해 주세요.',
         focus_tags: [],
         recent_stats: [],
         patterns: ['아직 스윙 데이터가 없습니다. 오늘 첫 스윙을 기록해볼까요?'],
         best_swing: { exists: false },
-        meta: { total_swings: 0, days_range: DAYS }
+        meta: {
+          total_swings: 0,
+          days_range: DAYS,
+        },
       });
     }
 
-    // ----- 통계용 유틸 -----
-    const avg = (arr) => {
-      const nums = arr.map(Number).filter(n => !Number.isNaN(n));
-      if (!nums.length) return 0;
-      return nums.reduce((a, b) => a + b, 0) / nums.length;
-    };
-
-    // ----- 태그 생성 규칙 -----
+    // 태그 카운트
     const tagCount = {};
-    const weaknessTags = ['head_unstable', 'tempo_fast', 'tempo_slow', 'balance_weak', 'finish_weak', 'overall_low'];
-    const strengthTags = ['head_stable', 'tempo_good', 'balance_good', 'overall_good'];
 
-    function buildTagsForSwing(s) {
-      const tags = [];
-      const head = Number(s.head_movement_pct);
-      const balance = Number(s.balance_score);
-      const tempo = s.tempo_ratio != null ? Number(s.tempo_ratio) : null;
-      const score = s.overall_score != null ? Number(s.overall_score) : null;
-      const comment = (s.ai_comment || '').toLowerCase();
-
-      if (!Number.isNaN(balance) && balance >= 0.97) tags.push('balance_good');
-      if (!Number.isNaN(balance) && balance < 0.9) tags.push('balance_weak');
-
-      if (!Number.isNaN(head) && head >= 40) tags.push('head_unstable');
-      if (!Number.isNaN(head) && head <= 15) tags.push('head_stable');
-
-      if (tempo != null && !Number.isNaN(tempo)) {
-        if (tempo < 0.8) tags.push('tempo_fast');
-        else if (tempo > 3.5) tags.push('tempo_slow');
-        else tags.push('tempo_good');
-      }
-
-      if (score != null && score >= 70) tags.push('overall_good');
-      if (score != null && score <= 45) tags.push('overall_low');
-
-      if (comment.includes('피니시') && comment.includes('아쉽')) tags.push('finish_weak');
-      if (comment.includes('비거리')) tags.push('distance_focus');
-
-      return tags;
-    }
-
-    function tagToLabel(tag) {
-      const map = {
-        head_unstable: '머리 고정',
-        head_stable: '머리 안정',
-        tempo_fast: '템포 조금 느리게',
-        tempo_slow: '템포 조금 빠르게',
-        tempo_good: '템포 유지',
-        balance_good: '밸런스 유지',
-        balance_weak: '밸런스 개선',
-        finish_weak: '피니시 끝까지',
-        distance_focus: '비거리 집중',
-        overall_low: '기본 리듬 만들기',
-        overall_good: '현재 리듬 유지'
-      };
-      return map[tag] || tag;
-    }
-
-    function buildGoalText(topWeak, topStrong) {
-      if (!topWeak.length && !topStrong.length) {
-        return '오늘은 가볍게 리듬만 느끼며 스윙해 보세요.';
-      }
-      const weakLabels = topWeak.map(t => tagToLabel(t.tag));
-      if (weakLabels.length >= 2) {
-        return `${weakLabels[0]}와 ${weakLabels[1]}에 집중해 보는 하루를 추천합니다.`;
-      }
-      if (weakLabels.length === 1) {
-        return `${weakLabels[0]}에 집중하면서, 강점은 그대로 유지해 보는 루틴입니다.`;
-      }
-      const strongLabels = topStrong.map(t => tagToLabel(t.tag));
-      return `${strongLabels.join(', ')} 강점을 유지하면서 편안하게 스윙해 보세요.`;
-    }
-
-    function buildPatternSentences({ topWeak, topStrong, total, avgScore, avgHead, avgBalance }) {
-      const list = [];
-      if (topStrong.length) {
-        const label = tagToLabel(topStrong[0].tag);
-        list.push(`강점 · ${label} 패턴이 꾸준히 유지되고 있습니다.`);
-      }
-      if (topWeak.length) {
-        const label = tagToLabel(topWeak[0].tag);
-        list.push(`약점 · 최근 스윙에서 ${label} 관련 태그가 자주 등장하고 있습니다.`);
-      }
-      if (avgHead) {
-        list.push(`머리 흔들림 평균이 약 ${avgHead.toFixed(1)}% 수준입니다. 오늘은 머리 위치를 한 번 더 의식해 보세요.`);
-      }
-      list.push(`최근 ${DAYS}일 동안 총 ${total}개의 스윙이 기록되었습니다. 점수 변화 추이를 보며 나만의 리듬을 만들어가고 있습니다.`);
-      return list;
-    }
-
-    function pickBestSwing(swings) {
-      if (!swings.length) return { exists: false };
-
-      const preferred = swings.filter(
-        s => s.feeling_code === 'perfect' || s.feeling_code === 'good'
-      );
-      const candidateList = preferred.length ? preferred : swings;
-
-      candidateList.sort((a, b) => {
-        const sa = Number(a.overall_score || 0);
-        const sb = Number(b.overall_score || 0);
-        return sb - sa;
-      });
-
-      const best = candidateList[0];
-      const clubNames = { driver: '드라이버', wood: '우드', iron: '아이언', wedge: '웨지', putter: '퍼터' };
-      const sideNames = { front: '정면', side: '측면', back: '후면' };
-
-      const title = `${clubNames[best.club_type] || best.club_type} / ${sideNames[best.shot_side] || best.shot_side} · 점수 ${best.overall_score ?? '-'}점`;
-
-      const date = new Date(best.created_at);
-      const dateText = date.toLocaleString('ko-KR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: 'numeric',
-        minute: '2-digit'
-      });
-
-      const tags = [];
-      if (best.overall_score >= 70) tags.push('대표 샷');
-      if (best.balance_score >= 0.97) tags.push('밸런스 좋음');
-      if (best.tempo_ratio && best.tempo_ratio >= 2.5 && best.tempo_ratio <= 3.5) tags.push('템포 안정');
-
-      return {
-        exists: true,
-        id: best.id,
-        title,
-        date_text: dateText,
-        tags
-      };
-    }
-
-    // ---- 스윙마다 태그 계산 + 통계 ----
     const enriched = rows.map(s => {
       const tags = buildTagsForSwing(s);
       tags.forEach(t => {
@@ -207,26 +296,26 @@ router.get('/today', auth, async (req, res) => {
         key: 'swing_count',
         label: '스윙 개수',
         value_text: `${total}개`,
-        ratio: Math.min(total / 20, 1)
+        ratio: Math.min(total / 20, 1),
       },
       {
         key: 'avg_score',
         label: '평균 점수',
         value_text: `${Math.round(avgScore)}점`,
-        ratio: Math.min(avgScore / 100, 1)
+        ratio: Math.min(avgScore / 100, 1),
       },
       {
         key: 'head_move',
         label: '머리 흔들림(평균)',
         value_text: `${avgHead.toFixed(1)}%`,
-        ratio: Math.min(avgHead / 100, 1)
+        ratio: Math.min(avgHead / 100, 1),
       },
       {
         key: 'balance',
         label: '밸런스 점수(평균)',
         value_text: avgBalance.toFixed(2),
-        ratio: Math.min(avgBalance, 1)
-      }
+        ratio: Math.min(avgBalance, 1),
+      },
     ];
 
     const sortedTags = Object.entries(tagCount)
@@ -237,15 +326,24 @@ router.get('/today', auth, async (req, res) => {
     const topStrong = sortedTags.filter(t => strengthTags.includes(t.tag)).slice(0, 1);
 
     const focus_tags = [...topWeak, ...topStrong].map(t => tagToLabel(t.tag));
-    const patterns = buildPatternSentences({ topWeak, topStrong, total, avgScore, avgHead, avgBalance });
+    const patterns = buildPatternSentences({
+      topWeak,
+      topStrong,
+      total,
+      avgScore,
+      avgHead,
+      avgBalance,
+    });
+
     const best_swing = pickBestSwing(enriched);
 
     const now = new Date();
-    const date_text = now.toLocaleDateString('ko-KR', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    }) + ' · 루틴 베타';
+    const date_text =
+      now.toLocaleDateString('ko-KR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }) + ' · 루틴 베타';
 
     const goal_text = buildGoalText(topWeak, topStrong);
 
@@ -259,12 +357,16 @@ router.get('/today', auth, async (req, res) => {
       best_swing,
       meta: {
         total_swings: total,
-        days_range: DAYS
-      }
+        days_range: DAYS,
+      },
     });
   } catch (err) {
     console.error('GET /routine/today error:', err);
-    res.status(500).json({ ok: false, error: 'ROUTINE_TODAY_FAILED' });
+    return res.status(500).json({
+      ok: false,
+      error: 'ROUTINE_TODAY_FAILED',
+      detail: err.message,
+    });
   }
 });
 
