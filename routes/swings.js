@@ -298,6 +298,7 @@ router.get('/:id', async (req, res, next) => {
 
 
 // 3) 히스토리 리스트 조회
+// 3) 히스토리 리스트 조회
 router.get('/', async (req, res, next) => {
   try {
     const userId = req.user.id;
@@ -311,6 +312,7 @@ router.get('/', async (req, res, next) => {
         s.shot_side,
         s.comment,
         s.created_at,
+
         m.backswing_angle,
         m.impact_speed,
         m.follow_through_angle,
@@ -323,11 +325,28 @@ router.get('/', async (req, res, next) => {
         m.hip_rotation_range,
         m.rotation_efficiency,
         m.overall_score,
+
         f.feeling_code,
-        f.note
+        f.note,
+
+        -- 🔥 추가: 오늘 스윙 여부
+        DATE(s.created_at) = CURDATE() AS is_today,
+
+        -- 🔥 추가: 진행 중 루틴 세션에 포함되는지
+        rs.id IS NOT NULL             AS in_active_routine,
+        rs.id                         AS routine_session_id
+
       FROM swings s
       LEFT JOIN metrics  m ON s.id = m.swing_id
       LEFT JOIN feelings f ON s.id = f.swing_id
+
+      -- 🔥 추가: 루틴 세션 조인
+      LEFT JOIN routine_sessions rs
+        ON rs.user_id = s.user_id
+       AND rs.status = 'IN_PROGRESS'
+       AND s.created_at >= rs.start_at
+       AND (rs.end_at IS NULL OR s.created_at <= rs.end_at)
+
       WHERE s.user_id = ?
       ORDER BY s.created_at DESC
       `,
@@ -340,7 +359,13 @@ router.get('/', async (req, res, next) => {
       club_type: row.club_type,
       shot_side: row.shot_side,
       created_at: row.created_at,
-      comment: row.comment,    // 👈 AI 코멘트
+      comment: row.comment,    // AI 코멘트
+
+      // 🔹 오늘/루틴 여부 그대로 보내기 (프론트에서 Boolean으로 써도 됨)
+      is_today:          !!row.is_today,
+      in_active_routine: !!row.in_active_routine,
+      routine_session_id: row.routine_session_id,
+
       metrics: {
         backswing_angle: row.backswing_angle,
         impact_speed: row.impact_speed,
@@ -369,6 +394,7 @@ router.get('/', async (req, res, next) => {
     return next(err);
   }
 });
+
 
 
 
