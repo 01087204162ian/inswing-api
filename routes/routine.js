@@ -10,9 +10,8 @@ const DAYS = 14;
 
 // DB Helper: mysql2 / 커스텀 래퍼 모두 대응
 async function query(sql, params) {
-  const result = await db.query(sql, params);
-  if (Array.isArray(result) && Array.isArray(result[0])) return result[0];
-  return result;
+  const [rows] = await db.query(sql, params);
+  return rows;   // SELECT면 rows(Array), INSERT면 ResultSetHeader(Object)
 }
 
 // 평균 계산
