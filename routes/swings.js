@@ -337,14 +337,14 @@ router.get('/', async (req, res, next) => {
         DATE(s.created_at) = CURDATE() AS is_today,
 
         -- 🔥 추가: 진행 중 루틴 세션에 포함되는지
-        rs.id IS NOT NULL             AS in_active_routine,
-        rs.id                         AS routine_session_id
+        rs.id IS NOT NULL AS in_active_routine,
+        rs.id             AS routine_session_id
 
       FROM swings s
       LEFT JOIN metrics  m ON s.id = m.swing_id
       LEFT JOIN feelings f ON s.id = f.swing_id
 
-      -- 🔥 추가: 루틴 세션 조인
+      -- 🔥 추가: 루틴 세션 조인(진행 중 세션 기준)
       LEFT JOIN routine_sessions rs
         ON rs.user_id = s.user_id
        AND rs.status = 'IN_PROGRESS'
@@ -363,9 +363,9 @@ router.get('/', async (req, res, next) => {
       club_type: row.club_type,
       shot_side: row.shot_side,
       created_at: row.created_at,
-      comment: row.comment,    // AI 코멘트
+      comment: row.comment, // AI 코멘트
 
-      // 🔹 오늘/루틴 여부 그대로 보내기 (프론트에서 Boolean으로 써도 됨)
+      // 🔹 루틴/오늘 정보
       is_today:          !!row.is_today,
       in_active_routine: !!row.in_active_routine,
       routine_session_id: row.routine_session_id,
@@ -398,6 +398,7 @@ router.get('/', async (req, res, next) => {
     return next(err);
   }
 });
+
 
 
 
