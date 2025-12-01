@@ -95,16 +95,32 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           overall_score: analysis.overall_score ?? null
         };
       } catch (err) {
-        // Python 서버가 "스윙 자세를 감지할 수 없습니다"로 400을 던진 경우 등
-        if (err.status === 400 && err.clientMessage) {
-          // 롤백 및 파일 정리 후, 바로 클라이언트에 에러 전달
+        // Axios 에러 형태에서 Python AI 서버의 응답을 파싱
+        const axiosRes = err.response;
+        const status = axiosRes?.status || err.status;
+        const rawError =
+          axiosRes?.data?.error ||
+          err.clientMessage ||
+          err.message;
+
+        const isNoSwing =
+          typeof rawError === 'string' &&
+          (rawError.includes('스윙 자세를 감지할 수 없습니다') ||
+            rawError.includes('스윙하는 사람의 전체 몸이 화면에 충분히 보이지 않습니다'));
+
+        // 스윙 자체를 감지하지 못한 경우 → 더미 데이터 사용 금지, 그대로 400 반환
+        if (status === 400 && isNoSwing) {
           await connection.rollback();
           if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-          return res.status(400).json({ ok: false, error: err.clientMessage });
+          return res.status(400).json({
+            ok: false,
+            error:
+              '스윙 동작을 감지하지 못했습니다. 스윙 전체가 화면에 나오도록, 사람의 몸이 잘 보이게 다시 촬영해 주세요.'
+          });
         }
 
+        // 그 외: 서버 장애, 타임아웃 등 → 더미 메트릭으로 Fallback
         console.error('AI 서버 오류, 더미 데이터 사용:', err);
-        // 서버 장애, 타임아웃 등인 경우에만 더미 메트릭 사용
         metrics = {
           backswing_angle: (Math.random() * 30 + 70).toFixed(2),
           impact_speed: (Math.random() * 20 + 90).toFixed(2),
