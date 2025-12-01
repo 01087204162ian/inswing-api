@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
-
-// ✅ 프로젝트에 맞게 경로 확인하기
 const db = require('../db');          // 또는 '../db'
 const auth = require('../middlewares/auth'); // auth 미들웨어
 
+
+router.use(authMiddleware.requireAuth);
 const DAYS = 14;
 
 // DB Helper: mysql2 / 커스텀 래퍼 무엇이든 대응하도록 rows 추출
@@ -370,4 +370,134 @@ router.get('/today', auth, async (req, res) => {
   }
 });
 
+
+/**
+ * GET /routine/active
+ * - 현재 진행 중(IN_PROGRESS) 루틴 세션이 있는지 확인
+ */
+router.get('/active', async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [rows] = await db.query(
+      `
+      SELECT id, start_at, end_at, status
+      FROM routine_sessions
+      WHERE user_id = ?
+        AND status = 'IN_PROGRESS'
+      ORDER BY start_at DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (!rows.length) {
+      return res.json({ ok: true, active: false });
+    }
+
+    return res.json({
+      ok: true,
+      active: true,
+      session: rows[0],
+    });
+  } catch (err) {
+    console.error('GET /routine/active error:', err);
+    return res.status(500).json({ ok: false, error: 'ACTIVE_ROUTINE_ERROR' });
+  }
+});
+
+/**
+ * POST /routine/start
+ * - 진행 중 세션이 없을 때만 새 세션 생성
+ */
+router.post('/start', async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // 이미 진행 중인 세션이 있는지 체크
+    const [existing] = await db.query(
+      `
+      SELECT id
+      FROM routine_sessions
+      WHERE user_id = ?
+        AND status = 'IN_PROGRESS'
+      ORDER BY start_at DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (existing.length) {
+      return res.status(400).json({
+        ok: false,
+        error: 'SESSION_ALREADY_ACTIVE',
+        message: '이미 진행 중인 루틴이 있습니다. 먼저 마무리해 주세요.',
+      });
+    }
+
+    const [result] = await db.query(
+      `
+      INSERT INTO routine_sessions (user_id, start_at, status)
+      VALUES (?, NOW(), 'IN_PROGRESS')
+      `,
+      [userId]
+    );
+
+    return res.json({
+      ok: true,
+      session_id: result.insertId,
+    });
+  } catch (err) {
+    console.error('POST /routine/start error:', err);
+    return res.status(500).json({ ok: false, error: 'START_ROUTINE_ERROR' });
+  }
+});
+
+/**
+ * POST /routine/end
+ * - 가장 최근 IN_PROGRESS 세션을 완료 처리
+ */
+router.post('/end', async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [rows] = await db.query(
+      `
+      SELECT id
+      FROM routine_sessions
+      WHERE user_id = ?
+        AND status = 'IN_PROGRESS'
+      ORDER BY start_at DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (!rows.length) {
+      return res.status(400).json({
+        ok: false,
+        error: 'NO_ACTIVE_SESSION',
+        message: '진행 중인 루틴이 없습니다.',
+      });
+    }
+
+    const sessionId = rows[0].id;
+
+    await db.query(
+      `
+      UPDATE routine_sessions
+      SET end_at = NOW(), status = 'COMPLETED'
+      WHERE id = ?
+      `,
+      [sessionId]
+    );
+
+    return res.json({ ok: true, session_id: sessionId });
+  } catch (err) {
+    console.error('POST /routine/end error:', err);
+    return res.status(500).json({ ok: false, error: 'END_ROUTINE_ERROR' });
+  }
+});
+
 module.exports = router;
+
