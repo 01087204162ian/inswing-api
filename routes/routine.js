@@ -4,7 +4,7 @@ const db = require('../db');          // 또는 '../db'
 const auth = require('../middlewares/auth'); // auth 미들웨어
 
 
-router.use(authMiddleware.requireAuth);
+//router.use(authMiddleware.requireAuth);
 const DAYS = 14;
 
 // DB Helper: mysql2 / 커스텀 래퍼 무엇이든 대응하도록 rows 추출
