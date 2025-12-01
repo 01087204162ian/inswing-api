@@ -219,11 +219,15 @@ router.get('/today', async (req, res) => {
 /* =======================================
    📌 GET /routine/active
    ======================================= */
+/**
+ * GET /routine/active
+ * - 현재 진행 중(IN_PROGRESS) 루틴 세션이 있는지 확인
+ */
 router.get('/active', async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const rows = await query(
+    const [rows] = await db.query(
       `
       SELECT id, start_at, end_at, status
       FROM routine_sessions
@@ -235,9 +239,34 @@ router.get('/active', async (req, res) => {
       [userId]
     );
 
-    return rows.length
-      ? res.json({ ok: true, active: true, session: rows[0] })
-      : res.json({ ok: true, active: false });
+    if (!rows.length) {
+      return res.json({ ok: true, active: false });
+    }
+
+    const session = rows[0];
+
+    // 선택: 이 세션 동안 업로드된 스윙 개수/평균 점수도 같이 주기
+    const [statsRows] = await db.query(
+      `
+      SELECT 
+        COUNT(*)              AS swing_count,
+        AVG(m.overall_score)  AS avg_score
+      FROM swings s
+      LEFT JOIN metrics m ON m.swing_id = s.id
+      WHERE s.user_id = ?
+        AND s.created_at >= ?
+      `,
+      [userId, session.start_at]
+    );
+
+    const stats = statsRows[0] || { swing_count: 0, avg_score: null };
+
+    return res.json({
+      ok: true,
+      active: true,
+      session,
+      stats,
+    });
   } catch (err) {
     console.error('GET /routine/active error:', err);
     return res.status(500).json({ ok: false, error: 'ACTIVE_ROUTINE_ERROR' });
