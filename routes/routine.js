@@ -1,31 +1,27 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db');          // 또는 '../db'
-const auth = require('../middlewares/auth'); // auth 미들웨어
+const db = require('../db');
+const authMiddleware = require('../middlewares/auth'); // 로그인 필수
 
+// 모든 /routine/* 라우트 인증 필요
+router.use(authMiddleware);
 
-//router.use(authMiddleware.requireAuth);
 const DAYS = 14;
 
-// DB Helper: mysql2 / 커스텀 래퍼 무엇이든 대응하도록 rows 추출
+// DB Helper: mysql2 / 커스텀 래퍼 모두 대응
 async function query(sql, params) {
   const result = await db.query(sql, params);
-  // mysql2/promise: [rows, fields]
-  if (Array.isArray(result) && Array.isArray(result[0])) {
-    return result[0];
-  }
-  // 커스텀 래퍼: rows 바로 반환
+  if (Array.isArray(result) && Array.isArray(result[0])) return result[0];
   return result;
 }
 
-// 평균 계산 유틸
+// 평균 계산
 function avg(arr) {
   const nums = arr.map(Number).filter(n => !Number.isNaN(n));
-  if (!nums.length) return 0;
-  return nums.reduce((a, b) => a + b, 0) / nums.length;
+  return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
 }
 
-// 태그 생성용 규칙
+// 태그 규칙
 const weaknessTags = [
   'head_unstable',
   'tempo_fast',
@@ -44,44 +40,35 @@ const strengthTags = [
 
 function buildTagsForSwing(s) {
   const tags = [];
-  const head = s.head_movement_pct != null ? Number(s.head_movement_pct) : null;
-  const balance = s.balance_score != null ? Number(s.balance_score) : null;
-  const tempo = s.tempo_ratio != null ? Number(s.tempo_ratio) : null;
-  const score = s.overall_score != null ? Number(s.overall_score) : null;
+  const head = Number(s.head_movement_pct);
+  const balance = Number(s.balance_score);
+  const tempo = Number(s.tempo_ratio);
+  const score = Number(s.overall_score);
   const comment = (s.ai_comment || '').toLowerCase();
 
-  // 밸런스
-  if (balance != null && !Number.isNaN(balance)) {
+  if (!Number.isNaN(balance)) {
     if (balance >= 0.97) tags.push('balance_good');
     else if (balance < 0.9) tags.push('balance_weak');
   }
 
-  // 머리 흔들림
-  if (head != null && !Number.isNaN(head)) {
+  if (!Number.isNaN(head)) {
     if (head >= 40) tags.push('head_unstable');
     else if (head <= 15) tags.push('head_stable');
   }
 
-  // 템포
-  if (tempo != null && !Number.isNaN(tempo)) {
+  if (!Number.isNaN(tempo)) {
     if (tempo < 0.8) tags.push('tempo_fast');
     else if (tempo > 3.5) tags.push('tempo_slow');
     else tags.push('tempo_good');
   }
 
-  // 점수
-  if (score != null && !Number.isNaN(score)) {
+  if (!Number.isNaN(score)) {
     if (score >= 70) tags.push('overall_good');
     if (score <= 45) tags.push('overall_low');
   }
 
-  // 코멘트 기반 간단 태그
-  if (comment.includes('피니시') && comment.includes('아쉽')) {
-    tags.push('finish_weak');
-  }
-  if (comment.includes('비거리')) {
-    tags.push('distance_focus');
-  }
+  if (comment.includes('피니시') && comment.includes('아쉽')) tags.push('finish_weak');
+  if (comment.includes('비거리')) tags.push('distance_focus');
 
   return tags;
 }
@@ -109,180 +96,88 @@ function buildGoalText(topWeak, topStrong) {
   }
 
   const weakLabels = topWeak.map(t => tagToLabel(t.tag));
-  if (weakLabels.length >= 2) {
-    return `${weakLabels[0]}와 ${weakLabels[1]}에 집중해 보는 하루를 추천합니다.`;
-  }
-  if (weakLabels.length === 1) {
-    return `${weakLabels[0]}에 집중하면서, 강점은 그대로 유지해 보는 루틴입니다.`;
-  }
+  if (weakLabels.length >= 2) return `${weakLabels[0]}와 ${weakLabels[1]}에 집중해 보는 하루를 추천합니다.`;
+  if (weakLabels.length === 1) return `${weakLabels[0]}에 집중하면서, 강점은 그대로 유지해 보는 루틴입니다.`;
 
   const strongLabels = topStrong.map(t => tagToLabel(t.tag));
   return `${strongLabels.join(', ')} 강점을 유지하면서 편안하게 스윙해 보세요.`;
 }
 
-function buildPatternSentences({ topWeak, topStrong, total, avgScore, avgHead, avgBalance }) {
+function buildPatternSentences({ topWeak, topStrong, total, avgHead }) {
   const list = [];
-
-  if (topStrong.length) {
-    const label = tagToLabel(topStrong[0].tag);
-    list.push(`강점 · ${label} 패턴이 꾸준히 유지되고 있습니다.`);
-  }
-
-  if (topWeak.length) {
-    const label = tagToLabel(topWeak[0].tag);
-    list.push(`약점 · 최근 스윙에서 ${label} 관련 태그가 자주 등장하고 있습니다.`);
-  }
-
-  if (avgHead) {
-    list.push(
-      `머리 흔들림 평균이 약 ${avgHead.toFixed(
-        1,
-      )}% 수준입니다. 오늘은 머리 위치를 한 번 더 의식해 보세요.`,
-    );
-  }
-
-  list.push(
-    `최근 ${DAYS}일 동안 총 ${total}개의 스윙이 기록되었습니다. 점수 변화 추이를 보며 나만의 리듬을 만들어가고 있습니다.`,
-  );
-
+  if (topStrong.length) list.push(`강점 · ${tagToLabel(topStrong[0].tag)} 패턴이 꾸준히 유지되고 있습니다.`);
+  if (topWeak.length) list.push(`약점 · 최근 스윙에서 ${tagToLabel(topWeak[0].tag)} 관련 태그가 자주 등장하고 있습니다.`);
+  if (avgHead) list.push(`머리 흔들림 평균이 약 ${avgHead.toFixed(1)}% 수준입니다. 오늘은 머리 위치를 한 번 더 의식해 보세요.`);
+  list.push(`최근 ${DAYS}일 동안 총 ${total}개의 스윙이 기록되었습니다. 점수 변화 추이를 보며 나만의 리듬을 만들어가고 있습니다.`);
   return list;
 }
 
 function pickBestSwing(swings) {
   if (!swings.length) return { exists: false };
+  const preferred = swings.filter(s => s.feeling_code === 'perfect' || s.feeling_code === 'good');
+  const list = preferred.length ? preferred : swings;
+  list.sort((a, b) => Number(b.overall_score || 0) - Number(a.overall_score || 0));
+  const best = list[0];
 
-  // 느낌이 좋은 스윙 우선
-  const preferred = swings.filter(
-    s => s.feeling_code === 'perfect' || s.feeling_code === 'good',
-  );
-  const candidateList = preferred.length ? preferred : swings;
+  const clubNames = { driver: '드라이버', wood: '우드', iron: '아이언', wedge: '웨지', putter: '퍼터' };
+  const sideNames = { front: '정면', side: '측면', back: '후면' };
 
-  candidateList.sort((a, b) => {
-    const sa = Number(a.overall_score || 0);
-    const sb = Number(b.overall_score || 0);
-    return sb - sa;
-  });
-
-  const best = candidateList[0];
-
-  const clubNames = {
-    driver: '드라이버',
-    wood: '우드',
-    iron: '아이언',
-    wedge: '웨지',
-    putter: '퍼터',
-  };
-  const sideNames = {
-    front: '정면',
-    side: '측면',
-    back: '후면',
-  };
-
-  const title = `${clubNames[best.club_type] || best.club_type} / ${
-    sideNames[best.shot_side] || best.shot_side
-  } · 점수 ${best.overall_score ?? '-'}점`;
-
-  const date = new Date(best.created_at);
-  const dateText = date.toLocaleString('ko-KR', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-
-  const tags = [];
-  if (best.overall_score >= 70) tags.push('대표 샷');
-  if (best.balance_score >= 0.97) tags.push('밸런스 좋음');
-  if (best.tempo_ratio && best.tempo_ratio >= 2.5 && best.tempo_ratio <= 3.5) {
-    tags.push('템포 안정');
-  }
+  const title = `${clubNames[best.club_type] || best.club_type} / ${sideNames[best.shot_side] || best.shot_side} · 점수 ${best.overall_score ?? '-'}점`;
 
   return {
     exists: true,
     id: best.id,
     title,
-    date_text: dateText,
-    tags,
+    date_text: new Date(best.created_at).toLocaleString('ko-KR'),
+    tags: [
+      ...(best.overall_score >= 70 ? ['대표 샷'] : []),
+      ...(best.balance_score >= 0.97 ? ['밸런스 좋음'] : []),
+      ...(best.tempo_ratio >= 2.5 && best.tempo_ratio <= 3.5 ? ['템포 안정'] : []),
+    ],
   };
 }
 
-// 🔥 오늘 루틴 API
-router.get('/today', auth, async (req, res) => {
+/* =======================================
+   📌 GET /routine/today
+   ======================================= */
+router.get('/today', async (req, res) => {
   try {
     const userId = req.user.id;
-
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - DAYS);
 
     const rows = await query(
       `
-      SELECT
-        s.id,
-        s.user_id,
-        s.video_url,
-        s.club_type,
-        s.shot_side,
-        s.comment AS ai_comment,
-        s.created_at,
-
-        m.backswing_angle,
-        m.impact_speed,
-        m.follow_through_angle,
-        m.balance_score,
-        m.tempo_ratio,
-        m.backswing_time_sec,
-        m.downswing_time_sec,
-        m.head_movement_pct,
-        m.shoulder_rotation_range,
-        m.hip_rotation_range,
-        m.rotation_efficiency,
-        m.overall_score,
-
-        f.feeling_code
+      SELECT s.id, s.user_id, s.club_type, s.shot_side, s.comment AS ai_comment, s.created_at,
+             m.balance_score, m.tempo_ratio, m.head_movement_pct, m.overall_score,
+             f.feeling_code
       FROM swings s
-      LEFT JOIN metrics  m ON m.swing_id = s.id
+      LEFT JOIN metrics m ON m.swing_id = s.id
       LEFT JOIN feelings f ON f.swing_id = s.id
       WHERE s.user_id = ?
         AND s.created_at >= ?
       ORDER BY s.created_at DESC
-    `,
-      [userId, sinceDate],
+      `,
+      [userId, sinceDate]
     );
 
-    // 스윙 데이터가 하나도 없을 때
     if (!rows.length) {
-      const now = new Date();
-      const date_text =
-        now.toLocaleDateString('ko-KR', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-        }) + ' · 루틴 첫 시작';
-
       return res.json({
         ok: true,
-        date_text,
+        date_text: new Date().toLocaleDateString('ko-KR') + ' · 루틴 첫 시작',
         goal_text: '먼저 스윙을 1개 이상 업로드해 주세요.',
         focus_tags: [],
         recent_stats: [],
         patterns: ['아직 스윙 데이터가 없습니다. 오늘 첫 스윙을 기록해볼까요?'],
         best_swing: { exists: false },
-        meta: {
-          total_swings: 0,
-          days_range: DAYS,
-        },
+        meta: { total_swings: 0, days_range: DAYS },
       });
     }
 
-    // 태그 카운트
     const tagCount = {};
-
     const enriched = rows.map(s => {
       const tags = buildTagsForSwing(s);
-      tags.forEach(t => {
-        tagCount[t] = (tagCount[t] || 0) + 1;
-      });
+      tags.forEach(t => (tagCount[t] = (tagCount[t] || 0) + 1));
       return { ...s, tags };
     });
 
@@ -291,33 +186,6 @@ router.get('/today', auth, async (req, res) => {
     const avgHead = avg(enriched.map(s => s.head_movement_pct));
     const avgBalance = avg(enriched.map(s => s.balance_score));
 
-    const recent_stats = [
-      {
-        key: 'swing_count',
-        label: '스윙 개수',
-        value_text: `${total}개`,
-        ratio: Math.min(total / 20, 1),
-      },
-      {
-        key: 'avg_score',
-        label: '평균 점수',
-        value_text: `${Math.round(avgScore)}점`,
-        ratio: Math.min(avgScore / 100, 1),
-      },
-      {
-        key: 'head_move',
-        label: '머리 흔들림(평균)',
-        value_text: `${avgHead.toFixed(1)}%`,
-        ratio: Math.min(avgHead / 100, 1),
-      },
-      {
-        key: 'balance',
-        label: '밸런스 점수(평균)',
-        value_text: avgBalance.toFixed(2),
-        ratio: Math.min(avgBalance, 1),
-      },
-    ];
-
     const sortedTags = Object.entries(tagCount)
       .sort((a, b) => b[1] - a[1])
       .map(([tag, count]) => ({ tag, count }));
@@ -325,61 +193,37 @@ router.get('/today', auth, async (req, res) => {
     const topWeak = sortedTags.filter(t => weaknessTags.includes(t.tag)).slice(0, 2);
     const topStrong = sortedTags.filter(t => strengthTags.includes(t.tag)).slice(0, 1);
 
-    const focus_tags = [...topWeak, ...topStrong].map(t => tagToLabel(t.tag));
-    const patterns = buildPatternSentences({
-      topWeak,
-      topStrong,
-      total,
-      avgScore,
-      avgHead,
-      avgBalance,
-    });
-
-    const best_swing = pickBestSwing(enriched);
-
-    const now = new Date();
-    const date_text =
-      now.toLocaleDateString('ko-KR', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      }) + ' · 루틴 베타';
-
-    const goal_text = buildGoalText(topWeak, topStrong);
-
-    return res.json({
+    const response = {
       ok: true,
-      date_text,
-      goal_text,
-      focus_tags,
-      recent_stats,
-      patterns,
-      best_swing,
-      meta: {
-        total_swings: total,
-        days_range: DAYS,
-      },
-    });
+      date_text: new Date().toLocaleDateString('ko-KR') + ' · 루틴 베타',
+      goal_text: buildGoalText(topWeak, topStrong),
+      focus_tags: [...topWeak, ...topStrong].map(t => tagToLabel(t.tag)),
+      recent_stats: [
+        { key: 'swing_count', label: '스윙 개수', value_text: `${total}개`, ratio: Math.min(total / 20, 1) },
+        { key: 'avg_score', label: '평균 점수', value_text: `${Math.round(avgScore)}점`, ratio: Math.min(avgScore / 100, 1) },
+        { key: 'head_move', label: '머리 흔들림(평균)', value_text: `${avgHead.toFixed(1)}%`, ratio: Math.min(avgHead / 100, 1) },
+        { key: 'balance', label: '밸런스 점수(평균)', value_text: avgBalance.toFixed(2), ratio: Math.min(avgBalance, 1) },
+      ],
+      patterns: buildPatternSentences({ topWeak, topStrong, total, avgHead }),
+      best_swing: pickBestSwing(enriched),
+      meta: { total_swings: total, days_range: DAYS },
+    };
+
+    return res.json(response);
   } catch (err) {
     console.error('GET /routine/today error:', err);
-    return res.status(500).json({
-      ok: false,
-      error: 'ROUTINE_TODAY_FAILED',
-      detail: err.message,
-    });
+    return res.status(500).json({ ok: false, error: 'ROUTINE_TODAY_FAILED', detail: err.message });
   }
 });
 
-
-/**
- * GET /routine/active
- * - 현재 진행 중(IN_PROGRESS) 루틴 세션이 있는지 확인
- */
+/* =======================================
+   📌 GET /routine/active
+   ======================================= */
 router.get('/active', async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const [rows] = await db.query(
+    const rows = await query(
       `
       SELECT id, start_at, end_at, status
       FROM routine_sessions
@@ -391,31 +235,23 @@ router.get('/active', async (req, res) => {
       [userId]
     );
 
-    if (!rows.length) {
-      return res.json({ ok: true, active: false });
-    }
-
-    return res.json({
-      ok: true,
-      active: true,
-      session: rows[0],
-    });
+    return rows.length
+      ? res.json({ ok: true, active: true, session: rows[0] })
+      : res.json({ ok: true, active: false });
   } catch (err) {
     console.error('GET /routine/active error:', err);
     return res.status(500).json({ ok: false, error: 'ACTIVE_ROUTINE_ERROR' });
   }
 });
 
-/**
- * POST /routine/start
- * - 진행 중 세션이 없을 때만 새 세션 생성
- */
+/* =======================================
+   📌 POST /routine/start
+   ======================================= */
 router.post('/start', async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 이미 진행 중인 세션이 있는지 체크
-    const [existing] = await db.query(
+    const rows = await query(
       `
       SELECT id
       FROM routine_sessions
@@ -427,7 +263,7 @@ router.post('/start', async (req, res) => {
       [userId]
     );
 
-    if (existing.length) {
+    if (rows.length) {
       return res.status(400).json({
         ok: false,
         error: 'SESSION_ALREADY_ACTIVE',
@@ -435,7 +271,7 @@ router.post('/start', async (req, res) => {
       });
     }
 
-    const [result] = await db.query(
+    const result = await query(
       `
       INSERT INTO routine_sessions (user_id, start_at, status)
       VALUES (?, NOW(), 'IN_PROGRESS')
@@ -443,25 +279,21 @@ router.post('/start', async (req, res) => {
       [userId]
     );
 
-    return res.json({
-      ok: true,
-      session_id: result.insertId,
-    });
+    return res.json({ ok: true, session_id: result.insertId });
   } catch (err) {
     console.error('POST /routine/start error:', err);
     return res.status(500).json({ ok: false, error: 'START_ROUTINE_ERROR' });
   }
 });
 
-/**
- * POST /routine/end
- * - 가장 최근 IN_PROGRESS 세션을 완료 처리
- */
+/* =======================================
+   📌 POST /routine/end
+   ======================================= */
 router.post('/end', async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const [rows] = await db.query(
+    const rows = await query(
       `
       SELECT id
       FROM routine_sessions
@@ -483,7 +315,7 @@ router.post('/end', async (req, res) => {
 
     const sessionId = rows[0].id;
 
-    await db.query(
+    await query(
       `
       UPDATE routine_sessions
       SET end_at = NOW(), status = 'COMPLETED'
@@ -500,4 +332,3 @@ router.post('/end', async (req, res) => {
 });
 
 module.exports = router;
-
