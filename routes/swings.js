@@ -8,6 +8,7 @@ const FormData = require('form-data');
 const db = require('../db');
 const { s3Client, Upload } = require('../config/s3');
 const { generateSwingComment } = require('../services/commentService');
+const { generateCoaching } = require('../services/aiCoachingService');
 
 const router = express.Router();
 
@@ -107,11 +108,35 @@ router.post('/', upload.single('video'), async (req, res, next) => {
       fs.unlinkSync(req.file.path); // 로컬 파일 삭제
 
       // ==== 스윙 저장 + 코멘트 생성 ====
-      const aiComment = generateSwingComment(metrics, {
-        feelingCode: null,
-        clubType: club_type,
-        shotSide: shot_side
-      });
+      let aiComment;
+      const useAICoaching = process.env.USE_AI_COACHING === 'true';
+
+      if (useAICoaching) {
+        try {
+          aiComment = await generateCoaching(
+            metrics,
+            {
+              user_id: userId,
+              club_type,
+              shot_side
+            },
+            null
+          );
+        } catch (err) {
+          console.error('AI 코칭 생성 실패, 규칙 기반 코멘트로 대체:', err);
+          aiComment = generateSwingComment(metrics, {
+            feelingCode: null,
+            clubType: club_type,
+            shotSide: shot_side
+          });
+        }
+      } else {
+        aiComment = generateSwingComment(metrics, {
+          feelingCode: null,
+          clubType: club_type,
+          shotSide: shot_side
+        });
+      }
 
       const [swingResult] = await connection.query(
         'INSERT INTO swings (user_id, video_url, club_type, shot_side, comment) VALUES (?, ?, ?, ?, ?)',
@@ -275,12 +300,16 @@ router.get('/:id', async (req, res, next) => {
         }
       : null;
 
-    // 🔥 여기서 코멘트 생성
-    const comment = generateSwingComment(metrics, {
-      feelingCode: feeling?.feeling_code || null,
-      clubType: row.club_type,
-      shotSide: row.shot_side
-    });
+    // DB에 저장된 코멘트가 있으면 우선 사용,
+    // 없으면 규칙 기반 코멘트 생성
+    let comment = row.comment;
+    if (!comment) {
+      comment = generateSwingComment(metrics, {
+        feelingCode: feeling?.feeling_code || null,
+        clubType: row.club_type,
+        shotSide: row.shot_side
+      });
+    }
 
     return res.json({
       ok: true,
