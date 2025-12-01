@@ -11,6 +11,10 @@ const { generateSwingComment } = require('../services/commentService');
 
 const router = express.Router();
 
+
+// 🔥 추가
+const authMiddleware = require('../middlewares/auth');
+router.use(authMiddleware);
 // ===== File Upload 설정 =====
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
