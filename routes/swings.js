@@ -256,7 +256,7 @@ router.get('/:id', async (req, res, next) => {
       balance_score: row.balance_score,
       tempo_ratio: row.tempo_ratio,
       backswing_time_sec: row.backswing_time_sec,
-      downswing_time_sec: row.downnswing_time_sec,
+      downswing_time_sec: row.downswing_time_sec,
       head_movement_pct: row.head_movement_pct,
       shoulder_rotation_range: row.shoulder_rotation_range,
       hip_rotation_range: row.hip_rotation_range,
