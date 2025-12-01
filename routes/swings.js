@@ -57,7 +57,29 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           { headers: formData.getHeaders(), timeout: 900000 }
         );
 
-        const analysis = aiResponse.data?.analysis || {};
+        // Python 서버에서 에러를 반환한 경우 처리
+        if (!aiResponse.data || aiResponse.data.error || !aiResponse.data.analysis) {
+          const rawError = aiResponse.data?.error;
+
+          // 스윙을 감지하지 못한 경우: 사용자에게 안내하고 400으로 종료
+          const isNoSwing =
+            typeof rawError === 'string' &&
+            rawError.includes('스윙 자세를 감지할 수 없습니다');
+
+          if (isNoSwing) {
+            const error = new Error('스윙 자세를 감지할 수 없습니다.');
+            error.status = 400;
+            error.clientMessage =
+              '스윙 동작을 감지하지 못했습니다. 스윙 전체가 화면에 나오도록 다시 촬영해 주세요.';
+            throw error;
+          }
+
+          // 그 외 AI 서버 쪽 에러는 일반 에러로 처리 → 아래 catch에서 분기
+          const error = new Error(rawError || 'AI 분석 중 오류가 발생했습니다.');
+          throw error;
+        }
+
+        const analysis = aiResponse.data.analysis;
         metrics = {
           backswing_angle: analysis.backswing_angle,
           impact_speed: analysis.impact_speed,
@@ -73,7 +95,16 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           overall_score: analysis.overall_score ?? null
         };
       } catch (err) {
-        console.error('AI 서버 오류, 더미 데이터 사용');
+        // Python 서버가 "스윙 자세를 감지할 수 없습니다"로 400을 던진 경우 등
+        if (err.status === 400 && err.clientMessage) {
+          // 롤백 및 파일 정리 후, 바로 클라이언트에 에러 전달
+          await connection.rollback();
+          if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+          return res.status(400).json({ ok: false, error: err.clientMessage });
+        }
+
+        console.error('AI 서버 오류, 더미 데이터 사용:', err);
+        // 서버 장애, 타임아웃 등인 경우에만 더미 메트릭 사용
         metrics = {
           backswing_angle: (Math.random() * 30 + 70).toFixed(2),
           impact_speed: (Math.random() * 20 + 90).toFixed(2),
