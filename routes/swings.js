@@ -520,6 +520,9 @@ router.get('/', async (req, res, next) => {
       [userId]
     );
 
+    // 전체 평균 메트릭 계산 (비교용)
+    const previousMetrics = await getPreviousMetrics(userId, 20);
+
     const swings = rows.map(row => {
       const metrics = {
         backswing_angle: row.backswing_angle,
@@ -539,6 +542,13 @@ router.get('/', async (req, res, next) => {
       // 핵심 포인트 태그 생성
       const focusTag = getFocusTag(metrics);
 
+      // 평소 대비 비교 태그 생성
+      let previousCompareTag = null;
+      if (previousMetrics) {
+        const changes = calculateChange(metrics, previousMetrics);
+        previousCompareTag = getCompareTag(changes);
+      }
+
       return {
         id: row.id,
         video_url: row.video_url,
@@ -547,6 +557,7 @@ router.get('/', async (req, res, next) => {
         created_at: row.created_at,
         comment: row.comment, // AI 코멘트
         focus_tag: focusTag,
+        previous_compare_tag: previousCompareTag,
 
         // 🔹 루틴/오늘 정보
         is_today:          !!row.is_today,
