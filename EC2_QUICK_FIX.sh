@@ -36,3 +36,45 @@ echo "  npm run logs:stats"
 echo ""
 echo "백업 파일: package.json.backup.*"
 
+#!/bin/bash
+# INSWING EC2 QUICK FIX SCRIPT
+# 위치 기준: ~/inswing-api/EC2_QUICK_FIX.sh
+
+set -e
+
+echo "🚀 INSWING EC2 QUICK FIX 시작"
+
+# 1) 기본 정보
+echo "🔹 현재 시간: $(date)"
+echo "🔹 현재 디렉토리: $(pwd)"
+
+# 2) pm2 상태 확인
+echo
+echo "📊 PM2 프로세스 상태:"
+pm2 list
+
+# 3) inswing-api 재시작 (없으면 생성)
+echo
+echo "🔁 inswing-api 재시작..."
+cd ~/inswing-api
+pm2 restart inswing-api 2>/dev/null || pm2 start server.js --name inswing-api
+
+# 4) inswing-ai 재시작 (없으면 생성)
+echo
+echo "🔁 inswing-ai 재시작..."
+cd ~/inswing-ai
+pm2 restart inswing-ai 2>/dev/null || pm2 start app.py --name inswing-ai
+
+# 5) 간단 로그 확인
+echo
+echo "📜 최근 API 로그 20줄:"
+pm2 logs inswing-api --lines 20
+
+echo
+echo "📜 최근 AI 로그 20줄:"
+pm2 logs inswing-ai --lines 20
+
+echo
+echo "✅ QUICK FIX 완료"
+
+
