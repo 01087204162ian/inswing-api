@@ -1,10 +1,22 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
 });
+
+// 로그 디렉토리 경로
+const LOG_DIR = path.join(__dirname, '../logs');
+const AI_COACHING_LOG = path.join(LOG_DIR, 'ai-coaching.log');
+const PERFORMANCE_LOG = path.join(LOG_DIR, 'performance.log');
+
+// logs 폴더가 없으면 생성
+if (!fs.existsSync(LOG_DIR)) {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+}
 
 /**
  * 공용 Claude 호출 함수
@@ -56,8 +68,20 @@ async function testConnection() {
  * feeling: { feeling_code, note } | null
  */
 async function generateCoaching(metrics, swing, feeling = null) {
+  const startTime = Date.now();
+  const userId = swing.user_id || null;
+  const swingId = swing.id || null;
+
   if (!metrics || !swing) {
-    throw new Error('metrics와 swing 정보가 필요합니다.');
+    const error = new Error('metrics와 swing 정보가 필요합니다.');
+    logAICoaching({
+      userId,
+      swingId,
+      success: false,
+      duration: Date.now() - startTime,
+      error: error.message
+    });
+    throw error;
   }
 
   const clubNames = {
@@ -130,17 +154,118 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
 
 위 조건을 모두 반영하여, 한글로만 2~3문장으로 피드백을 작성해 주세요.`;
 
-  const coaching = await callClaudeAPI(prompt, {
-    max_tokens: 320,
-    temperature: 0.7
-  });
+  try {
+    const coachingStartTime = Date.now();
+    const coaching = await callClaudeAPI(prompt, {
+      max_tokens: 320,
+      temperature: 0.7
+    });
+    const coachingDuration = Date.now() - coachingStartTime;
 
-  return coaching;
+    // 성공 로그 기록
+    const totalDuration = Date.now() - startTime;
+    logAICoaching({
+      userId,
+      swingId,
+      success: true,
+      duration: totalDuration,
+      tokensUsed: null, // Claude API 응답에 토큰 정보가 포함되지 않으면 null
+      model: 'claude-3-haiku-20240307'
+    });
+
+    logPerformance({
+      operation: 'generateCoaching',
+      duration: totalDuration,
+      success: true
+    });
+
+    return coaching;
+  } catch (error) {
+    const totalDuration = Date.now() - startTime;
+    
+    // 실패 로그 기록
+    logAICoaching({
+      userId,
+      swingId,
+      success: false,
+      duration: totalDuration,
+      error: error.message || '알 수 없는 오류'
+    });
+
+    logPerformance({
+      operation: 'generateCoaching',
+      duration: totalDuration,
+      success: false,
+      error: error.message || '알 수 없는 오류'
+    });
+
+    throw error;
+  }
+}
+
+/**
+ * AI 코칭 로그 기록
+ * @param {Object} data - 로그 데이터
+ * @param {number} data.userId - 사용자 ID
+ * @param {number} data.swingId - 스윙 ID
+ * @param {boolean} data.success - 성공 여부
+ * @param {number} data.duration - 소요 시간 (ms)
+ * @param {number} [data.tokensUsed] - 사용된 토큰 수
+ * @param {string} [data.error] - 에러 메시지
+ * @param {string} [data.model] - 사용된 모델
+ */
+function logAICoaching(data) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      userId: data.userId || null,
+      swingId: data.swingId || null,
+      success: data.success,
+      duration: data.duration,
+      tokensUsed: data.tokensUsed || null,
+      model: data.model || 'claude-3-haiku-20240307',
+      error: data.error || null
+    };
+
+    // JSON 형태로 로그 파일에 추가
+    fs.appendFileSync(AI_COACHING_LOG, JSON.stringify(logEntry) + '\n');
+  } catch (err) {
+    // 로깅 실패해도 메인 로직에는 영향 없도록
+    console.error('로깅 실패:', err);
+  }
+}
+
+/**
+ * 성능 로그 기록
+ * @param {Object} data - 성능 데이터
+ * @param {string} data.operation - 작업명 (예: 'generateCoaching', 'callClaudeAPI')
+ * @param {number} data.duration - 소요 시간 (ms)
+ * @param {boolean} data.success - 성공 여부
+ * @param {string} [data.error] - 에러 메시지
+ */
+function logPerformance(data) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      operation: data.operation,
+      duration: data.duration,
+      success: data.success,
+      error: data.error || null
+    };
+
+    fs.appendFileSync(PERFORMANCE_LOG, JSON.stringify(logEntry) + '\n');
+  } catch (err) {
+    console.error('성능 로깅 실패:', err);
+  }
 }
 
 module.exports = {
   testConnection,
   callClaudeAPI,
-  generateCoaching
+  generateCoaching,
+  logAICoaching,
+  logPerformance
 };
 
