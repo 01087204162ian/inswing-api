@@ -64,13 +64,14 @@ async function testConnection() {
 /**
  * 스윙 메트릭 기반 AI 코멘트 생성 (존댓말)
  * metrics: analyze_swing 결과 (숫자/nullable)
- * swing: { club_type, shot_side, user_id?, id? }
+ * swing: { club_type, shot_side, user_id?, id?, user_name? }
  * feeling: { feeling_code, note } | null
  */
 async function generateCoaching(metrics, swing, feeling = null) {
   const startTime = Date.now();
   const userId = swing.user_id || null;
   const swingId = swing.id || null;
+  const userName = swing.user_name || null;
 
   if (!metrics || !swing) {
     const error = new Error('metrics와 swing 정보가 필요합니다.');
@@ -119,10 +120,14 @@ async function generateCoaching(metrics, swing, feeling = null) {
 
   const userNote = feeling?.note ? feeling.note.trim() : '';
 
+  // 사용자 이름 처리: 있으면 이름 사용, 없으면 "님"만 붙임
+  const userGreeting = userName ? `${userName}님` : '님';
+
   const prompt = `당신은 20년 경력의 친절한 골프 레슨 프로입니다.
 아마추어 골퍼의 스윙 데이터를 보고, 공감해 주면서도 구체적인 조언을 해 주는 역할입니다.
 
 반드시 **존댓말**로만 말해 주세요. 너무 가볍지 않지만, 따뜻하고 응원하는 톤이면 좋겠습니다.
+**중요**: 피드백을 작성할 때, 반드시 "${userGreeting}"으로 시작하거나 문장 중간에 자연스럽게 "${userGreeting}"을 사용해 주세요. "선생님"이나 "고객"이라는 표현은 절대 사용하지 마세요.
 
 ### 스윙 정보
 - 클럽: ${clubName}
@@ -141,11 +146,11 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
 위 정보를 바탕으로, 아래 조건을 꼭 지켜서 **2~3문장**의 피드백을 작성해 주세요.
 
 1. 첫 문장은 전체적인 느낌을 부드럽게 정리해 주세요.
-   - 예) "이번 스윙은 전체적으로 리듬이 안정적이셨습니다." 처럼요.
+   - 예) "${userGreeting}, 이번 스윙은 전체적으로 리듬이 안정적이셨습니다." 처럼요.
 2. 두 번째 문장은 가장 중요한 한 가지 포인트를 짚어 주세요.
    - 예) 머리 흔들림, 템포, 밸런스, 회전 중 하나를 선택해서 말씀해 주세요.
 3. 세 번째 문장은 바로 연습할 수 있는 간단한 행동 지침을 제안해 주세요.
-   - 예) "다음 연습 때는 ○○에만 한 번 집중해서 스윙해 보시면 좋겠습니다." 처럼요.
+   - 예) "${userGreeting}, 다음 연습 때는 ○○에만 한 번 집중해서 스윙해 보시면 좋겠습니다." 처럼요.
 
 추가 규칙:
 - 과장된 표현(프로 수준, 완벽합니다 등)은 피하고, 솔직하지만 따뜻하게 말씀해 주세요.
