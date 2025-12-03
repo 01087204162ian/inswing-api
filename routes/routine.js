@@ -179,6 +179,7 @@ router.get('/today', async (req, res) => {
         best_swing: { exists: false },
         meta: { total_swings: 0, days_range: DAYS },
         user_name: userName,
+        user_id: userId,
       });
     }
 
@@ -216,6 +217,7 @@ router.get('/today', async (req, res) => {
       best_swing: pickBestSwing(enriched),
       meta: { total_swings: total, days_range: DAYS },
       user_name: userName,
+      user_id: userId,
     };
 
     return res.json(response);
