@@ -154,6 +154,13 @@ router.post('/', upload.single('video'), async (req, res, next) => {
 
       fs.unlinkSync(req.file.path); // 로컬 파일 삭제
 
+      // ==== 사용자 이름 조회 ====
+      const [userRows] = await connection.query(
+        'SELECT name FROM users WHERE id = ?',
+        [userId]
+      );
+      const userName = userRows.length > 0 ? userRows[0].name : null;
+
       // ==== 스윙 저장 + 코멘트 생성 ====
       let aiComment;
       const useAICoaching = process.env.USE_AI_COACHING === 'true';
@@ -164,6 +171,7 @@ router.post('/', upload.single('video'), async (req, res, next) => {
             metrics,
             {
               user_id: userId,
+              user_name: userName,
               club_type,
               shot_side
             },
@@ -383,6 +391,13 @@ router.get('/', async (req, res, next) => {
   try {
     const userId = req.user.id;
 
+    // 사용자 이름 조회
+    const [userRows] = await db.query(
+      'SELECT name FROM users WHERE id = ?',
+      [userId]
+    );
+    const userName = userRows.length > 0 && userRows[0].name ? userRows[0].name : null;
+
     const [rows] = await db.query(
       `
       SELECT
@@ -468,7 +483,7 @@ router.get('/', async (req, res, next) => {
         : null
     }));
 
-    return res.json({ ok: true, swings });
+    return res.json({ ok: true, swings, user_name: userName });
   } catch (err) {
     err.clientMessage = '스윙 히스토리를 불러오는 중 오류가 발생했습니다.';
     return next(err);
@@ -494,10 +509,12 @@ router.post('/:id/regenerate-coaching', async (req, res, next) => {
                 m.tempo_ratio, m.backswing_time_sec, m.downswing_time_sec,
                 m.head_movement_pct, m.shoulder_rotation_range, m.hip_rotation_range,
                 m.rotation_efficiency, m.overall_score,
-                f.feeling_code, f.note
+                f.feeling_code, f.note,
+                u.name as user_name
          FROM swings s
          LEFT JOIN metrics m ON s.id = m.swing_id
          LEFT JOIN feelings f ON s.id = f.swing_id
+         LEFT JOIN users u ON s.user_id = u.id
          WHERE s.id = ? AND s.user_id = ?`,
         [swingId, userId]
       );
@@ -546,6 +563,7 @@ router.post('/:id/regenerate-coaching', async (req, res, next) => {
             metrics,
             {
               user_id: userId,
+              user_name: swing.user_name,
               id: swingId,
               club_type: swing.club_type,
               shot_side: swing.shot_side
