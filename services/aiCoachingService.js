@@ -197,6 +197,9 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
   "조금 빠른 편", "표준에 가까운 편", "다소 큰 편"처럼 **정성적인 표현**으로 설명해 주세요.
 - 너무 전문적인 용어보다는, 아마추어가 이해하기 쉬운 표현으로 정리해 주세요.
 - 이모티콘은 사용하지 마세요.
+- 전체 코멘트 길이는 120자에서 200자 사이로 맞춰 주세요.
+- 문장은 2~3문장으로만 작성하고, 4문장을 넘기지 마세요.
+- 말줄임표(...)로 끝내지 말고, 완전한 문장으로 마무리해 주세요.
 
 위 조건을 모두 반영하여, 한글로만 2~3문장으로 피드백을 작성해 주세요.`;
 
@@ -207,6 +210,55 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
       temperature: 0.7
     });
     const coachingDuration = Date.now() - coachingStartTime;
+
+    // ---- 코멘트 후처리: 문장 수 및 길이 제한 ----
+    let finalComment = (coaching || '').trim();
+
+    // 1) 공백 정리
+    finalComment = finalComment.replace(/\s+/g, ' ');
+
+    // 2) 문장 분리 (마침표 기준) 후 최대 3문장까지만 사용
+    let sentences = finalComment.split(/(?<=\.)\s+/).filter(Boolean);
+    if (sentences.length > 3) {
+      sentences = sentences.slice(0, 3);
+    }
+    finalComment = sentences.join(' ').trim();
+
+    // 3) 길이 제한 (최대 220자 정도로 컷)
+    const MAX_LEN = 220;
+    if (finalComment.length > MAX_LEN) {
+      const words = finalComment.split(' ');
+      let trimmed = '';
+
+      for (const word of words) {
+        const candidate = trimmed ? trimmed + ' ' + word : word;
+        if (candidate.length > MAX_LEN) break;
+        trimmed = candidate;
+      }
+
+      finalComment = trimmed.trim();
+
+      // 문장 끝이 마침표가 아니면 간단히 마무리
+      if (!/[.!?]$/.test(finalComment)) {
+        finalComment += '다.';
+      }
+    }
+
+    // 4) 말줄임표 제거 및 완전한 문장으로 마무리
+    finalComment = finalComment.replace(/\.{2,}/g, '').trim();
+    if (!/[.!?]$/.test(finalComment)) {
+      finalComment += '다.';
+    }
+
+    // 5) 최소 길이 방어 (너무 짧으면 원문 유지)
+    if (finalComment.length < 60 && coaching) {
+      finalComment = coaching.trim();
+      // 원문도 말줄임표 제거
+      finalComment = finalComment.replace(/\.{2,}/g, '').trim();
+      if (!/[.!?]$/.test(finalComment)) {
+        finalComment += '다.';
+      }
+    }
 
     const totalDuration = Date.now() - startTime;
     logAICoaching({
@@ -224,7 +276,7 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
       success: true
     });
 
-    return coaching;
+    return finalComment;
   } catch (error) {
     const totalDuration = Date.now() - startTime;
 
