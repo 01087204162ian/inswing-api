@@ -4,7 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "logs": "node scripts/view-logs.js",
+    "logs:error": "node scripts/view-logs.js --error",
+    "logs:success": "node scripts/view-logs.js --success",
+    "logs:stats": "node scripts/view-logs.js --stats",
+    "logs:perf": "node scripts/view-logs.js --file performance",
+    "logs:follow": "node scripts/view-logs.js --follow"
   },
   "keywords": [],
   "author": "",
