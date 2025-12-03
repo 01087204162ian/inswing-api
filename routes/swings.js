@@ -475,8 +475,122 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// 코칭 재생성 API
+router.post('/:id/regenerate-coaching', async (req, res, next) => {
+  try {
+    const swingId = parseInt(req.params.id);
+    const userId = req.user.id;
 
+    if (!swingId || isNaN(swingId)) {
+      return res.status(400).json({ ok: false, error: '유효하지 않은 스윙 ID입니다.' });
+    }
 
+    const connection = await db.getConnection();
+    try {
+      // 스윙 정보 조회 (사용자 확인 포함)
+      const [swings] = await connection.query(
+        `SELECT s.id, s.user_id, s.club_type, s.shot_side, s.comment,
+                m.backswing_angle, m.impact_speed, m.follow_through_angle, m.balance_score,
+                m.tempo_ratio, m.backswing_time_sec, m.downswing_time_sec,
+                m.head_movement_pct, m.shoulder_rotation_range, m.hip_rotation_range,
+                m.rotation_efficiency, m.overall_score,
+                f.feeling_code, f.note
+         FROM swings s
+         LEFT JOIN metrics m ON s.id = m.swing_id
+         LEFT JOIN feelings f ON s.id = f.swing_id
+         WHERE s.id = ? AND s.user_id = ?`,
+        [swingId, userId]
+      );
 
+      if (swings.length === 0) {
+        return res.status(404).json({ ok: false, error: '스윙을 찾을 수 없습니다.' });
+      }
+
+      const swing = swings[0];
+
+      if (!swing.club_type || !swing.shot_side) {
+        return res.status(400).json({ ok: false, error: '스윙 정보가 불완전합니다.' });
+      }
+
+      // 메트릭 데이터 구성
+      const metrics = {
+        backswing_angle: swing.backswing_angle,
+        impact_speed: swing.impact_speed,
+        follow_through_angle: swing.follow_through_angle,
+        balance_score: swing.balance_score,
+        tempo_ratio: swing.tempo_ratio,
+        backswing_time_sec: swing.backswing_time_sec,
+        downswing_time_sec: swing.downswing_time_sec,
+        head_movement_pct: swing.head_movement_pct,
+        shoulder_rotation_range: swing.shoulder_rotation_range,
+        hip_rotation_range: swing.hip_rotation_range,
+        rotation_efficiency: swing.rotation_efficiency,
+        overall_score: swing.overall_score
+      };
+
+      // 느낌 데이터 구성
+      const feeling = swing.feeling_code
+        ? {
+            feeling_code: swing.feeling_code,
+            note: swing.note
+          }
+        : null;
+
+      // AI 코칭 재생성
+      const useAICoaching = process.env.USE_AI_COACHING === 'true';
+      let newCoaching;
+
+      if (useAICoaching) {
+        try {
+          newCoaching = await generateCoaching(
+            metrics,
+            {
+              user_id: userId,
+              id: swingId,
+              club_type: swing.club_type,
+              shot_side: swing.shot_side
+            },
+            feeling
+          );
+        } catch (err) {
+          console.error('AI 코칭 재생성 실패, 규칙 기반 코멘트로 대체:', err);
+          newCoaching = generateSwingComment(metrics, {
+            feelingCode: feeling?.feeling_code || null,
+            clubType: swing.club_type,
+            shotSide: swing.shot_side
+          });
+        }
+      } else {
+        newCoaching = generateSwingComment(metrics, {
+          feelingCode: feeling?.feeling_code || null,
+          clubType: swing.club_type,
+          shotSide: swing.shot_side
+        });
+      }
+
+      // DB 업데이트
+      await connection.query(
+        'UPDATE swings SET comment = ? WHERE id = ? AND user_id = ?',
+        [newCoaching, swingId, userId]
+      );
+
+      await connection.commit();
+
+      return res.json({
+        ok: true,
+        coaching: newCoaching
+      });
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+  } catch (err) {
+    console.error('코칭 재생성 오류:', err);
+    err.clientMessage = '코칭 재생성 중 오류가 발생했습니다.';
+    return next(err);
+  }
+});
 
 module.exports = router;
