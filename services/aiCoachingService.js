@@ -305,11 +305,57 @@ function logPerformance(data) {
   }
 }
 
+/**
+ * 스윙 메트릭 기반 핵심 포인트 태그 생성
+ * - 입력: analyze_swing 결과(metrics)
+ * - 출력: string (예: '머리 고정', '템포', '밸런스', '회전', '리듬 유지')
+ */
+function getFocusTag(metrics = {}) {
+  const tempo = metrics.tempo_ratio;
+  const headMove = metrics.head_movement_pct;
+  const balance = metrics.balance_score;
+  const backswing = metrics.backswing_angle;
+  const followThrough = metrics.follow_through_angle;
+
+  // 1순위: 머리 흔들림 (크면 '머리 고정')
+  if (typeof headMove === 'number') {
+    if (headMove >= 50) {
+      return '머리 고정';
+    }
+  }
+
+  // 2순위: 밸런스 (낮으면 '밸런스')
+  if (typeof balance === 'number') {
+    if (balance < 0.95) {
+      return '밸런스';
+    }
+  }
+
+  // 3순위: 템포 (너무 빠르거나, 비정상적인 값이면 '템포')
+  if (typeof tempo === 'number') {
+    // INSwing 데이터 기준: 0.5 이하, 4.0 이상은 "리듬이 흔들린 상태"로 간주
+    if (tempo <= 0.5 || tempo >= 4.0) {
+      return '템포';
+    }
+  }
+
+  // 4순위: 회전 (백스윙/팔로우스루가 작은 경우)
+  if (typeof backswing === 'number' && typeof followThrough === 'number') {
+    if (backswing < 100 || followThrough < 100) {
+      return '회전';
+    }
+  }
+
+  // 기본: 특별한 문제 없으면 리듬 유지
+  return '리듬 유지';
+}
+
 module.exports = {
   testConnection,
   callClaudeAPI,
   generateCoaching,
   logAICoaching,
-  logPerformance
+  logPerformance,
+  getFocusTag
 };
 

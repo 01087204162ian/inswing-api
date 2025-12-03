@@ -8,7 +8,7 @@ const FormData = require('form-data');
 const db = require('../db');
 const { s3Client, Upload } = require('../config/s3');
 const { generateSwingComment } = require('../services/commentService');
-const { generateCoaching } = require('../services/aiCoachingService');
+const { generateCoaching, getFocusTag } = require('../services/aiCoachingService');
 
 const router = express.Router();
 
@@ -237,6 +237,9 @@ router.post('/', upload.single('video'), async (req, res, next) => {
 
       await connection.commit();
 
+      // 핵심 포인트 태그 생성
+      const focusTag = getFocusTag(metrics);
+
       return res.json({
         ok: true,
         swing: {
@@ -244,7 +247,8 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           video_url: videoUrl,
           club_type,
           shot_side,
-          comment: aiComment
+          comment: aiComment,
+          focus_tag: focusTag
         },
         metrics
       });
@@ -366,6 +370,9 @@ router.get('/:id', async (req, res, next) => {
       });
     }
 
+    // 핵심 포인트 태그 생성
+    const focusTag = getFocusTag(metrics);
+
     return res.json({
       ok: true,
       swing: {
@@ -377,7 +384,8 @@ router.get('/:id', async (req, res, next) => {
       },
       metrics,
       feeling,
-      comment   // 👈 이게 프론트로 간다
+      comment,
+      focus_tag: focusTag
     });
   } catch (err) {
     return next(err);
@@ -448,20 +456,8 @@ router.get('/', async (req, res, next) => {
       [userId]
     );
 
-    const swings = rows.map(row => ({
-      id: row.id,
-      video_url: row.video_url,
-      club_type: row.club_type,
-      shot_side: row.shot_side,
-      created_at: row.created_at,
-      comment: row.comment, // AI 코멘트
-
-      // 🔹 루틴/오늘 정보
-      is_today:          !!row.is_today,
-      in_active_routine: !!row.in_active_routine,
-      routine_session_id: row.routine_session_id,
-
-      metrics: {
+    const swings = rows.map(row => {
+      const metrics = {
         backswing_angle: row.backswing_angle,
         impact_speed: row.impact_speed,
         follow_through_angle: row.follow_through_angle,
@@ -474,14 +470,34 @@ router.get('/', async (req, res, next) => {
         hip_rotation_range: row.hip_rotation_range,
         rotation_efficiency: row.rotation_efficiency,
         overall_score: row.overall_score
-      },
-      feeling: row.feeling_code
-        ? {
-            feeling_code: row.feeling_code,
-            note: row.note
-          }
-        : null
-    }));
+      };
+
+      // 핵심 포인트 태그 생성
+      const focusTag = getFocusTag(metrics);
+
+      return {
+        id: row.id,
+        video_url: row.video_url,
+        club_type: row.club_type,
+        shot_side: row.shot_side,
+        created_at: row.created_at,
+        comment: row.comment, // AI 코멘트
+        focus_tag: focusTag,
+
+        // 🔹 루틴/오늘 정보
+        is_today:          !!row.is_today,
+        in_active_routine: !!row.in_active_routine,
+        routine_session_id: row.routine_session_id,
+
+        metrics,
+        feeling: row.feeling_code
+          ? {
+              feeling_code: row.feeling_code,
+              note: row.note
+            }
+          : null
+      };
+    });
 
     return res.json({ ok: true, swings, user_name: userName });
   } catch (err) {
@@ -592,11 +608,15 @@ router.post('/:id/regenerate-coaching', async (req, res, next) => {
         [newCoaching, swingId, userId]
       );
 
+      // 핵심 포인트 태그 생성
+      const focusTag = getFocusTag(metrics);
+
       await connection.commit();
 
       return res.json({
         ok: true,
-        coaching: newCoaching
+        coaching: newCoaching,
+        focus_tag: focusTag
       });
     } catch (err) {
       await connection.rollback();
