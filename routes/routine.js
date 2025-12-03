@@ -147,11 +147,20 @@ router.get('/today', async (req, res) => {
     sinceDate.setDate(sinceDate.getDate() - DAYS);
 
     // 사용자 이름 조회
-    const [userRows] = await query(
+    const userRows = await query(
       'SELECT name FROM users WHERE id = ?',
       [userId]
     );
-    const userName = userRows.length > 0 && userRows[0].name ? userRows[0].name : null;
+    // 디버깅: 쿼리 결과 확인
+    if (userRows && userRows.length > 0) {
+      console.log(`[DEBUG] User ID ${userId} name query result:`, userRows[0]);
+    } else {
+      console.log(`[DEBUG] User ID ${userId} not found in users table`);
+    }
+    // 빈 문자열도 체크
+    const userName = userRows && userRows.length > 0 && userRows[0].name && userRows[0].name.trim() 
+      ? userRows[0].name.trim() 
+      : null;
 
     const rows = await query(
       `
