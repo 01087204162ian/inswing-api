@@ -109,10 +109,16 @@ async function generateCoaching(metrics, swing, feeling = null) {
   const clubName = clubNames[swing.club_type] || swing.club_type || '알 수 없음';
   const sideName = sideNames[swing.shot_side] || swing.shot_side || '알 수 없음';
 
-  const overall = metrics.overall_score ?? '알 수 없음';
-  const tempo = metrics.tempo_ratio ?? '알 수 없음';
-  const headMove = metrics.head_movement_pct ?? '알 수 없음';
-  const balance = metrics.balance_score ?? '알 수 없음';
+  // 숫자 원본 & 표시용 분리
+  const overallRaw = metrics.overall_score;
+  const tempoRaw = metrics.tempo_ratio;
+  const headMoveRaw = metrics.head_movement_pct;
+  const balanceRaw = metrics.balance_score;
+
+  const overall = overallRaw ?? '알 수 없음';
+  const tempo = tempoRaw ?? '알 수 없음';
+  const headMove = headMoveRaw ?? '알 수 없음';
+  const balance = balanceRaw ?? '알 수 없음';
 
   const feelingLine = feeling?.feeling_code
     ? (feelingNames[feeling.feeling_code] || '')
@@ -123,16 +129,34 @@ async function generateCoaching(metrics, swing, feeling = null) {
   // 사용자 이름 처리: 있으면 이름 사용, 없으면 "님"만 붙임
   const userGreeting = userName ? `${userName}님` : '님';
 
+  // 점수대에 따른 해석/톤 가이드
+  let scoreBand = 'unknown';
+  let scoreGuide = '점수 정보가 부족하므로, 무난한 톤으로 솔직하게 피드백해 주세요.';
+
+  if (typeof overallRaw === 'number') {
+    if (overallRaw >= 4.5) {
+      scoreBand = 'high';
+      scoreGuide =
+        '오늘은 비교적 잘 맞은 날에 가깝습니다. 장점을 먼저 분명하게 짚어 주시고, 아쉬운 점은 한 가지 정도만 부드럽게 언급해 주세요.';
+    } else if (overallRaw >= 3) {
+      scoreBand = 'mid';
+      scoreGuide =
+        '좋은 점과 아쉬운 점이 함께 있는 날입니다. 장점 1~2가지와 개선해야 할 핵심 1가지를 균형 있게 언급해 주세요.';
+    } else {
+      scoreBand = 'low';
+      scoreGuide =
+        '오늘은 평소보다 조금 흔들린 날입니다. 스윙이 나빴다고 단정 짓지 말고, 위로와 격려를 먼저 건넨 뒤, 가장 중요한 문제 1가지만 짚어 주세요.';
+    }
+  }
+
   const prompt = `당신은 20년 경력의 친절한 골프 레슨 프로입니다.
 아마추어 골퍼의 스윙 데이터를 보고, 공감해 주면서도 구체적인 조언을 해 주는 역할입니다.
 
 반드시 **존댓말**로만 말해 주세요. 너무 가볍지 않지만, 따뜻하고 응원하는 톤이면 좋겠습니다.
 
-**절대 금지 사항 (중요):**
+**호칭 규칙 (매우 중요):**
 - "고객님", "고객", "선생님", "선수님", "선배님", "아마추어", "골퍼님" 등의 호칭은 절대 사용하지 마세요.
-- 반드시 "${userGreeting}"만 사용하세요. 예: "${userGreeting}, 이번 스윙은..." 또는 "이번 스윙은... ${userGreeting}"
-
-**필수 사항:**
+- 반드시 "${userGreeting}"만 사용하세요.
 - 피드백의 첫 문장은 반드시 "${userGreeting},"으로 시작하세요.
 - 문장 중간에도 필요시 "${userGreeting}"을 자연스럽게 사용하세요.
 
@@ -143,24 +167,33 @@ ${feelingLine ? `- 골퍼의 주관적 느낌: ${feelingLine}` : ''}
 ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
 
 ### 분석 메트릭 (숫자는 참고용입니다)
-- 종합 스윙 점수: ${overall}
+- 종합 스윙 점수(1~5): ${overall}
 - 템포 비율(백스윙:다운스윙): ${tempo}
 - 머리 흔들림: ${headMove} (%)
 - 밸런스 점수: ${balance}
 - 백스윙 각도: ${metrics.backswing_angle ?? '알 수 없음'}
 - 팔로우스루 각도: ${metrics.follow_through_angle ?? '알 수 없음'}
 
+### 점수대에 따른 톤 가이드
+- 점수대: ${scoreBand}
+- 설명: ${scoreGuide}
+
 위 정보를 바탕으로, 아래 조건을 꼭 지켜서 **2~3문장**의 피드백을 작성해 주세요.
 
 1. 첫 문장은 전체적인 느낌을 부드럽게 정리해 주세요.
    - 예) "${userGreeting}, 이번 스윙은 전체적으로 리듬이 안정적이셨습니다." 처럼요.
+   - 점수대에 따라, 오늘이 "잘 맞은 날", "보통인 날", "조금 흔들린 날" 중 어떤 느낌인지 자연스럽게 표현해 주세요.
+
 2. 두 번째 문장은 가장 중요한 한 가지 포인트를 짚어 주세요.
-   - 예) 머리 흔들림, 템포, 밸런스, 회전 중 하나를 선택해서 말씀해 주세요.
+   - 예) 머리 흔들림, 템포, 밸런스, 회전 중에서 **가장 영향이 큰 것 한 가지만** 선택해서 말씀해 주세요.
+
 3. 세 번째 문장은 바로 연습할 수 있는 간단한 행동 지침을 제안해 주세요.
    - 예) "${userGreeting}, 다음 연습 때는 ○○에만 한 번 집중해서 스윙해 보시면 좋겠습니다." 처럼요.
 
 추가 규칙:
 - 과장된 표현(프로 수준, 완벽합니다 등)은 피하고, 솔직하지만 따뜻하게 말씀해 주세요.
+- 템포나 머리 흔들림과 같은 숫자는 그대로 읽어주기보다는,
+  "조금 빠른 편", "표준에 가까운 편", "다소 큰 편"처럼 **정성적인 표현**으로 설명해 주세요.
 - 너무 전문적인 용어보다는, 아마추어가 이해하기 쉬운 표현으로 정리해 주세요.
 - 이모티콘은 사용하지 마세요.
 
@@ -174,14 +207,13 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
     });
     const coachingDuration = Date.now() - coachingStartTime;
 
-    // 성공 로그 기록
     const totalDuration = Date.now() - startTime;
     logAICoaching({
       userId,
       swingId,
       success: true,
       duration: totalDuration,
-      tokensUsed: null, // Claude API 응답에 토큰 정보가 포함되지 않으면 null
+      tokensUsed: null,
       model: 'claude-3-haiku-20240307'
     });
 
@@ -194,8 +226,7 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
     return coaching;
   } catch (error) {
     const totalDuration = Date.now() - startTime;
-    
-    // 실패 로그 기록
+
     logAICoaching({
       userId,
       swingId,
