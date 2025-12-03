@@ -146,6 +146,13 @@ router.get('/today', async (req, res) => {
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - DAYS);
 
+    // 사용자 이름 조회
+    const [userRows] = await query(
+      'SELECT name FROM users WHERE id = ?',
+      [userId]
+    );
+    const userName = userRows.length > 0 && userRows[0].name ? userRows[0].name : null;
+
     const rows = await query(
       `
       SELECT s.id, s.user_id, s.club_type, s.shot_side, s.comment AS ai_comment, s.created_at, s.video_url,
@@ -171,6 +178,7 @@ router.get('/today', async (req, res) => {
         patterns: ['아직 스윙 데이터가 없습니다. 오늘 첫 스윙을 기록해볼까요?'],
         best_swing: { exists: false },
         meta: { total_swings: 0, days_range: DAYS },
+        user_name: userName,
       });
     }
 
@@ -207,6 +215,7 @@ router.get('/today', async (req, res) => {
       patterns: buildPatternSentences({ topWeak, topStrong, total, avgHead }),
       best_swing: pickBestSwing(enriched),
       meta: { total_swings: total, days_range: DAYS },
+      user_name: userName,
     };
 
     return res.json(response);
