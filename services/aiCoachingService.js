@@ -62,12 +62,92 @@ async function testConnection() {
 }
 
 /**
+ * 평소 대비 변화량 계산
+ * @param {Object} currentMetrics - 현재 스윙 메트릭
+ * @param {Object} previousMetrics - 평균 메트릭 (최근 N개 평균)
+ * @returns {Object} 변화량 정보
+ */
+function calculateChange(currentMetrics, previousMetrics) {
+  if (!previousMetrics) return null;
+
+  const changes = {};
+
+  // head_movement_pct: 변화량 (퍼센트 포인트)
+  if (typeof currentMetrics.head_movement_pct === 'number' && typeof previousMetrics.head_movement_pct === 'number') {
+    changes.head_movement_pct = currentMetrics.head_movement_pct - previousMetrics.head_movement_pct;
+  }
+
+  // balance_score: 변화량
+  if (typeof currentMetrics.balance_score === 'number' && typeof previousMetrics.balance_score === 'number') {
+    changes.balance_score = currentMetrics.balance_score - previousMetrics.balance_score;
+  }
+
+  // tempo_ratio: 변화량 (퍼센트)
+  if (typeof currentMetrics.tempo_ratio === 'number' && typeof previousMetrics.tempo_ratio === 'number') {
+    changes.tempo_ratio = ((currentMetrics.tempo_ratio - previousMetrics.tempo_ratio) / previousMetrics.tempo_ratio) * 100;
+  }
+
+  // backswing_angle: 변화량 (도)
+  if (typeof currentMetrics.backswing_angle === 'number' && typeof previousMetrics.backswing_angle === 'number') {
+    changes.backswing_angle = currentMetrics.backswing_angle - previousMetrics.backswing_angle;
+  }
+
+  // follow_through_angle: 변화량 (도)
+  if (typeof currentMetrics.follow_through_angle === 'number' && typeof previousMetrics.follow_through_angle === 'number') {
+    changes.follow_through_angle = currentMetrics.follow_through_angle - previousMetrics.follow_through_angle;
+  }
+
+  return changes;
+}
+
+/**
+ * 변화량 기반 비교 태그 생성
+ * @param {Object} changes - calculateChange 결과
+ * @returns {string} 비교 태그
+ */
+function getCompareTag(changes) {
+  if (!changes) return '평소 수준 유지';
+
+  // 1순위: head_movement_pct 변화량 ≥ +10%
+  if (typeof changes.head_movement_pct === 'number' && changes.head_movement_pct >= 10) {
+    return '평소보다 머리 흔들림 증가';
+  }
+
+  // 2순위: balance_score 변화량 ≥ ±0.03
+  if (typeof changes.balance_score === 'number') {
+    if (Math.abs(changes.balance_score) >= 0.03) {
+      return changes.balance_score < 0 ? '평소보다 밸런스 흔들림' : '평소보다 밸런스 안정';
+    }
+  }
+
+  // 3순위: tempo_ratio 변화량 ≥ ±15%
+  if (typeof changes.tempo_ratio === 'number') {
+    if (Math.abs(changes.tempo_ratio) >= 15) {
+      return changes.tempo_ratio > 0 ? '평소보다 템포 빠름' : '평소보다 템포 느림';
+    }
+  }
+
+  // 4순위: backswing or follow_through ±10°
+  if (typeof changes.backswing_angle === 'number' && Math.abs(changes.backswing_angle) >= 10) {
+    return changes.backswing_angle > 0 ? '평소보다 백스윙 증가' : '평소보다 백스윙 감소';
+  }
+
+  if (typeof changes.follow_through_angle === 'number' && Math.abs(changes.follow_through_angle) >= 10) {
+    return changes.follow_through_angle > 0 ? '평소보다 팔로우스루 증가' : '평소보다 팔로우스루 감소';
+  }
+
+  // 5순위: 변화 미미
+  return '평소 수준 유지';
+}
+
+/**
  * 스윙 메트릭 기반 AI 코멘트 생성 (존댓말)
  * metrics: analyze_swing 결과 (숫자/nullable)
  * swing: { club_type, shot_side, user_id?, id?, user_name? }
  * feeling: { feeling_code, note } | null
+ * previousMetrics: { ... } | null - 평소 평균 메트릭 (비교용)
  */
-async function generateCoaching(metrics, swing, feeling = null) {
+async function generateCoaching(metrics, swing, feeling = null, previousMetrics = null) {
   const startTime = Date.now();
   const userId = swing.user_id || null;
   const swingId = swing.id || null;
@@ -177,6 +257,21 @@ ${userNote ? `- 골퍼 메모: "${userNote}"` : ''}
 ### 점수대에 따른 톤 가이드
 - 점수대: ${scoreBand}
 - 설명: ${scoreGuide}
+${previousMetrics ? `
+### 평소 대비 변화 (중요)
+이번 스윙이 평소 대비 어떻게 다른지 아래 정보를 참고해 주세요.
+- 평소 평균 머리 흔들림: ${previousMetrics.head_movement_pct?.toFixed(1) ?? '알 수 없음'}% (현재: ${headMoveRaw ?? '알 수 없음'}%)
+- 평소 평균 밸런스: ${previousMetrics.balance_score?.toFixed(3) ?? '알 수 없음'} (현재: ${balanceRaw ?? '알 수 없음'})
+- 평소 평균 템포: ${previousMetrics.tempo_ratio?.toFixed(2) ?? '알 수 없음'} (현재: ${tempoRaw ?? '알 수 없음'})
+- 평소 평균 백스윙 각도: ${previousMetrics.backswing_angle?.toFixed(1) ?? '알 수 없음'}° (현재: ${metrics.backswing_angle ?? '알 수 없음'}°)
+- 평소 평균 팔로우스루 각도: ${previousMetrics.follow_through_angle?.toFixed(1) ?? '알 수 없음'}° (현재: ${metrics.follow_through_angle ?? '알 수 없음'}°)
+
+**평소 대비 코멘트 작성 규칙:**
+- 이번 스윙이 평소 대비 어떻게 다른지 2~3문장으로 설명해 주세요.
+- 수치 변화는 직접 언급하지 말고, 변화의 방향만 언급해 주세요. (예: "평소보다 조금 빠른 편", "평소와 비슷한 수준")
+- 비판적이지만 따뜻한 톤으로 작성해 주세요.
+- 평소보다 나아진 점이 있으면 격려해 주시고, 아쉬운 점이 있으면 부드럽게 지적해 주세요.
+` : ''}
 
 위 정보를 바탕으로, 아래 조건을 꼭 지켜서 **2~3문장**의 피드백을 작성해 주세요.
 
@@ -408,6 +503,8 @@ module.exports = {
   generateCoaching,
   logAICoaching,
   logPerformance,
-  getFocusTag
+  getFocusTag,
+  calculateChange,
+  getCompareTag
 };
 

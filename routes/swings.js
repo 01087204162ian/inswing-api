@@ -8,7 +8,7 @@ const FormData = require('form-data');
 const db = require('../db');
 const { s3Client, Upload } = require('../config/s3');
 const { generateSwingComment } = require('../services/commentService');
-const { generateCoaching, getFocusTag } = require('../services/aiCoachingService');
+const { generateCoaching, getFocusTag, calculateChange, getCompareTag } = require('../services/aiCoachingService');
 
 const router = express.Router();
 
@@ -30,6 +30,48 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+/**
+ * 최근 N개 스윙의 평균 메트릭 계산
+ * @param {number} userId - 사용자 ID
+ * @param {number} limit - 가져올 스윙 개수 (기본 20)
+ * @returns {Object|null} 평균 메트릭 또는 null
+ */
+async function getPreviousMetrics(userId, limit = 20) {
+  try {
+    const [rows] = await db.query(
+      `
+      SELECT
+        AVG(m.tempo_ratio) as avg_tempo_ratio,
+        AVG(m.head_movement_pct) as avg_head_movement_pct,
+        AVG(m.balance_score) as avg_balance_score,
+        AVG(m.backswing_angle) as avg_backswing_angle,
+        AVG(m.follow_through_angle) as avg_follow_through_angle
+      FROM swings s
+      INNER JOIN metrics m ON s.id = m.swing_id
+      WHERE s.user_id = ?
+      ORDER BY s.created_at DESC
+      LIMIT ?
+      `,
+      [userId, limit]
+    );
+
+    if (!rows || rows.length === 0 || !rows[0].avg_tempo_ratio) {
+      return null;
+    }
+
+    const row = rows[0];
+    return {
+      tempo_ratio: row.avg_tempo_ratio ? parseFloat(row.avg_tempo_ratio) : null,
+      head_movement_pct: row.avg_head_movement_pct ? parseFloat(row.avg_head_movement_pct) : null,
+      balance_score: row.avg_balance_score ? parseFloat(row.avg_balance_score) : null,
+      backswing_angle: row.avg_backswing_angle ? parseFloat(row.avg_backswing_angle) : null,
+      follow_through_angle: row.avg_follow_through_angle ? parseFloat(row.avg_follow_through_angle) : null
+    };
+  } catch (err) {
+    console.error('평균 메트릭 계산 실패:', err);
+    return null;
+  }
+}
 
 // 1) 스윙 업로드 + AI 분석 + S3 저장
 router.post('/', upload.single('video'), async (req, res, next) => {
@@ -163,7 +205,15 @@ router.post('/', upload.single('video'), async (req, res, next) => {
 
       // ==== 스윙 저장 + 코멘트 생성 ====
       let aiComment;
+      let previousCompareTag = null;
       const useAICoaching = process.env.USE_AI_COACHING === 'true';
+      const comparePrevious = req.query.compare === 'true';
+
+      // 평소 대비 비교가 요청된 경우 평균 메트릭 계산
+      let previousMetrics = null;
+      if (comparePrevious && useAICoaching) {
+        previousMetrics = await getPreviousMetrics(userId, 20);
+      }
 
       if (useAICoaching) {
         try {
@@ -175,8 +225,15 @@ router.post('/', upload.single('video'), async (req, res, next) => {
               club_type,
               shot_side
             },
-            null
+            null,
+            previousMetrics
           );
+
+          // 비교 태그 생성
+          if (previousMetrics) {
+            const changes = calculateChange(metrics, previousMetrics);
+            previousCompareTag = getCompareTag(changes);
+          }
         } catch (err) {
           console.error('AI 코칭 생성 실패, 규칙 기반 코멘트로 대체:', err);
           aiComment = generateSwingComment(metrics, {
@@ -240,7 +297,7 @@ router.post('/', upload.single('video'), async (req, res, next) => {
       // 핵심 포인트 태그 생성
       const focusTag = getFocusTag(metrics);
 
-      return res.json({
+      const response = {
         ok: true,
         swing: {
           id: swingId,
@@ -251,7 +308,14 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           focus_tag: focusTag
         },
         metrics
-      });
+      };
+
+      // 비교 태그가 있으면 추가
+      if (previousCompareTag) {
+        response.swing.previous_compare_tag = previousCompareTag;
+      }
+
+      return res.json(response);
     } catch (err) {
       await connection.rollback();
       if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
@@ -571,7 +635,15 @@ router.post('/:id/regenerate-coaching', async (req, res, next) => {
 
       // AI 코칭 재생성
       const useAICoaching = process.env.USE_AI_COACHING === 'true';
+      const comparePrevious = req.query.compare === 'true';
       let newCoaching;
+      let previousCompareTag = null;
+
+      // 평소 대비 비교가 요청된 경우 평균 메트릭 계산
+      let previousMetrics = null;
+      if (comparePrevious && useAICoaching) {
+        previousMetrics = await getPreviousMetrics(userId, 20);
+      }
 
       if (useAICoaching) {
         try {
@@ -584,8 +656,15 @@ router.post('/:id/regenerate-coaching', async (req, res, next) => {
               club_type: swing.club_type,
               shot_side: swing.shot_side
             },
-            feeling
+            feeling,
+            previousMetrics
           );
+
+          // 비교 태그 생성
+          if (previousMetrics) {
+            const changes = calculateChange(metrics, previousMetrics);
+            previousCompareTag = getCompareTag(changes);
+          }
         } catch (err) {
           console.error('AI 코칭 재생성 실패, 규칙 기반 코멘트로 대체:', err);
           newCoaching = generateSwingComment(metrics, {
@@ -613,11 +692,18 @@ router.post('/:id/regenerate-coaching', async (req, res, next) => {
 
       await connection.commit();
 
-      return res.json({
+      const response = {
         ok: true,
         coaching: newCoaching,
         focus_tag: focusTag
-      });
+      };
+
+      // 비교 태그가 있으면 추가
+      if (previousCompareTag) {
+        response.previous_compare_tag = previousCompareTag;
+      }
+
+      return res.json(response);
     } catch (err) {
       await connection.rollback();
       throw err;
