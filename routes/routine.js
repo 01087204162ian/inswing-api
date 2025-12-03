@@ -128,6 +128,7 @@ function pickBestSwing(swings) {
     id: best.id,
     title,
     date_text: new Date(best.created_at).toLocaleString('ko-KR'),
+    video_url: best.video_url || null,
     tags: [
       ...(best.overall_score >= 70 ? ['대표 샷'] : []),
       ...(best.balance_score >= 0.97 ? ['밸런스 좋음'] : []),
@@ -147,7 +148,7 @@ router.get('/today', async (req, res) => {
 
     const rows = await query(
       `
-      SELECT s.id, s.user_id, s.club_type, s.shot_side, s.comment AS ai_comment, s.created_at,
+      SELECT s.id, s.user_id, s.club_type, s.shot_side, s.comment AS ai_comment, s.created_at, s.video_url,
              m.balance_score, m.tempo_ratio, m.head_movement_pct, m.overall_score,
              f.feeling_code
       FROM swings s
