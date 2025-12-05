@@ -204,3 +204,9 @@ WebSocket으로 동일한 session:{session_id}에 접속하여 실시간으로 �
 세션 녹화/리플레이 (과거 레슨 세션 다시 보기)
 
 AI 코치 자동 응답 트리거 (특정 metric/feeling 조건에서 자동 코멘트)
+
+1️⃣ Phoenix에서 event:new 수신/브로드캐스트 구현
+2️⃣ result.html 에 WebSocket 연결 코드 추가 (console.log 테스트)
+3️⃣ inswing-api에서 swing 업로드 시 session_id 생성 로직 추가
+4️⃣ 커서에게 전달할 “실시간 코칭 화면 개발 지시서” 만들어주기
+5️⃣ 위 1~3을 하나의 체크리스트로 관리하는 PR 템플릿 구성
