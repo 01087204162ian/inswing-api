@@ -12,6 +12,57 @@ const { generateCoaching, getFocusTag, calculateChange, getCompareTag } = requir
 
 const router = express.Router();
 
+// WebSocket 브로드캐스트 헬퍼 함수
+async function broadcastSwingAnalyzed(swingId, metrics, aiComment, focusTag) {
+  const realtimeUrl = process.env.REALTIME_URL || 'http://localhost:4100';
+  const sessionId = `sess_${swingId}`;
+
+  try {
+    // swing_analyzed 이벤트 브로드캐스트
+    await axios.post(`${realtimeUrl}/api/broadcast`, {
+      topic: `session:${sessionId}`,
+      event: 'event:new',
+      payload: {
+        type: 'swing_analyzed',
+        session_id: sessionId,
+        swing_id: swingId,
+        author_role: 'ai',
+        author_id: 'ai_system',
+        message: `스윙 분석이 완료되었습니다.`,
+        meta: {
+          swing_id: swingId,
+          metrics: metrics,
+          focus_tag: focusTag,
+          ts: Date.now()
+        }
+      }
+    });
+
+    // ai_insight 이벤트 브로드캐스트 (AI 코멘트가 있는 경우)
+    if (aiComment) {
+      await axios.post(`${realtimeUrl}/api/broadcast`, {
+        topic: `session:${sessionId}`,
+        event: 'event:new',
+        payload: {
+          type: 'ai_insight',
+          session_id: sessionId,
+          swing_id: swingId,
+          author_role: 'ai',
+          author_id: 'ai_coach',
+          message: aiComment,
+          meta: {
+            swing_id: swingId,
+            persona: 'calm_mentor',
+            ts: Date.now()
+          }
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[Swings] WebSocket 방송 오류:', err.message);
+    throw err;
+  }
+}
 
 // 🔥 추가
 const authMiddleware = require('../middlewares/auth');
@@ -100,8 +151,18 @@ router.post('/', upload.single('video'), async (req, res, next) => {
         );
 
         // Python 서버에서 에러를 반환한 경우 처리
-        if (!aiResponse.data || aiResponse.data.error || !aiResponse.data.analysis) {
-          const rawError = aiResponse.data?.error;
+        // 문서 요구사항: 응답 형식이 metrics로 변경됨
+        const aiData = aiResponse.data || {};
+        if (aiData.error || (!aiData.metrics && !aiData.analysis)) {
+          const rawError = aiData.error;
+
+          // invalid_swing 플래그가 있는 경우도 처리
+          if (aiData.invalid_swing === true) {
+            const error = new Error('스윙 자세를 감지할 수 없습니다.');
+            error.status = 400;
+            error.clientMessage = '스윙 동작을 감지하지 못했습니다. 스윙 전체가 화면에 나오도록 다시 촬영해 주세요.';
+            throw error;
+          }
 
           // 스윙을 감지하지 못한 경우: 사용자에게 안내하고 400으로 종료
           const isNoSwing =
@@ -121,7 +182,8 @@ router.post('/', upload.single('video'), async (req, res, next) => {
           throw error;
         }
 
-        const analysis = aiResponse.data.analysis;
+        // 문서 요구사항: 응답 형식 변경 (analysis -> metrics)
+        const analysis = aiData.metrics || aiData.analysis || {};
         metrics = {
           backswing_angle: analysis.backswing_angle,
           impact_speed: analysis.impact_speed,
@@ -313,6 +375,18 @@ router.post('/', upload.single('video'), async (req, res, next) => {
       // 비교 태그가 있으면 추가
       if (previousCompareTag) {
         response.swing.previous_compare_tag = previousCompareTag;
+      }
+
+      // session_id 추가 (문서 요구사항)
+      response.swing_id = swingId;
+      response.session_id = `sess_${swingId}`;
+
+      // 문서 요구사항: WebSocket 방송 (swing_analyzed + ai_insight)
+      try {
+        await broadcastSwingAnalyzed(swingId, metrics, aiComment, focusTag);
+      } catch (broadcastErr) {
+        console.error('[Swings] WebSocket 방송 실패 (무시):', broadcastErr.message);
+        // 방송 실패해도 응답은 정상 반환
       }
 
       return res.json(response);
