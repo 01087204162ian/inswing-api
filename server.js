@@ -13,17 +13,19 @@ const errorHandler = require('./middlewares/errorHandler');
 const authRoutes = require('./routes/auth');
 const swingRoutes = require('./routes/swings');
 const feelingRoutes = require('./routes/feelings');
-
 const routineRoutes = require('./routes/routine');
+const profileRoutes = require('./routes/profile');
+const questionRoutes = require('./routes/questions');
+const trainingRoutes = require('./routes/training');
 
 const app = express();
 const PORT = 4000;
 
 // CORS
 app.use(corsMiddleware);
-app.use('/routine', routineRoutes);
 // JSON 파싱
 app.use(express.json());
+app.use('/routine', routineRoutes);
 
 // 정적 파일 (업로드된 원본 접근용 - 필요 시 유지)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -50,6 +52,11 @@ app.use('/swings', authMiddleware, swingRoutes);
 
 // /swings/:id/feeling → JWT 인증 필요
 app.use('/swings', authMiddleware, feelingRoutes);
+
+// v1 신규 API
+app.use('/v1', profileRoutes);
+app.use('/v1', questionRoutes);
+app.use('/v1', trainingRoutes);
 
 // 헬스체크
 app.get('/health', (req, res) => {
