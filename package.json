@@ -11,8 +11,6 @@
     "logs:stats": "node scripts/view-logs.js --stats",
     "logs:perf": "node scripts/view-logs.js --file performance",
     "logs:follow": "node scripts/view-logs.js --follow",
-
-    
     "ops:status": "pm2 list",
     "ops:restart": "pm2 restart inswing-api && pm2 restart inswing-ai",
     "ops:api-logs": "pm2 logs inswing-api --lines 30",
