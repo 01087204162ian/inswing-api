@@ -8,6 +8,15 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
 });
 
+// 공통 시스템 프롬프트: 하이클래스 코치 톤
+const HIGH_CLASS_SYSTEM_PROMPT = `
+당신은 투어 프로 선수들을 지도하는 하이클래스 골프 코치입니다.
+말투는 항상 존댓말이며, 차분하고 품격 있게 안내합니다.
+반말, 과한 감탄사, 가벼운 농담은 사용하지 않습니다.
+문제를 솔직하게 지적하되 사람을 비난하지 않습니다.
+한 번에 핵심 1~2개에 집중하고, 연습은 횟수/시간을 포함해 구체적으로 조언합니다.
+`;
+
 // 로그 디렉토리 경로
 const LOG_DIR = path.join(__dirname, '../logs');
 const AI_COACHING_LOG = path.join(LOG_DIR, 'ai-coaching.log');
@@ -33,6 +42,32 @@ async function callClaudeAPI(prompt, options = {}) {
       {
         role: 'user',
         content: prompt
+      }
+    ]
+  });
+
+  return message?.content?.[0]?.text?.trim() || '';
+}
+
+/**
+ * Claude 호출 (system + user 메시지 분리)
+ */
+async function callClaudeWithSystem(systemPrompt, userPrompt, options = {}) {
+  const model = options.model || 'claude-3-haiku-20240307';
+  const maxTokens = options.max_tokens || 800;
+
+  const message = await anthropic.messages.create({
+    model,
+    max_tokens: maxTokens,
+    temperature: options.temperature ?? 0.4,
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt
+      },
+      {
+        role: 'user',
+        content: userPrompt
       }
     ]
   });
@@ -507,104 +542,87 @@ async function generateTrainingData(comment) {
     throw new Error('comment가 필요합니다.');
   }
 
-  const prompt = `다음은 골프 스윙 분석 코멘트입니다:
+  const userPrompt = `
+다음은 골프 스윙 분석 코멘트입니다.
 
 "${comment}"
 
-이 코멘트를 바탕으로, 오늘 연습장에서 집중할 수 있는 **구체적이고 실천 가능한** 트레이닝 계획을 만들어 주세요.
-
-응답 형식은 반드시 다음 JSON 형식으로만 작성해 주세요 (다른 설명 없이 JSON만):
-
+위 정보를 바탕으로 아래 JSON만 반환하세요. 추가 설명/서론/코드블록/주석은 금지합니다.
+형식:
 {
   "focus": [
-    "첫 번째 집중 포인트 (예: 피니시 균형 유지)",
-    "두 번째 집중 포인트 (예: 템포 3:1 리듬 만들기)",
-    "세 번째 집중 포인트 (예: 상체 고정 & 체중 이동)"
+    "...",  // 오늘 이 스윙으로 집중할 포인트 3개 (각 15자 내외, '~하기' 형식)
+    "...",
+    "..."
   ],
   "routine_items": [
-    "첫 번째 연습 루틴 (예: 드라이버 빈스윙 15회 (피니시 3초 정지))",
-    "두 번째 연습 루틴 (예: 7번 아이언 템포 3:1 8회 30초)",
-    "세 번째 연습 루틴 (예: 어택 스트레칭 10분 + 샷 루틴 10회)"
+    "...",  // "동작 + 횟수/시간 + (핵심 키포인트)" 형식
+    "...",
+    "..."
   ],
-  "coach_summary": "오늘의 핵심 코칭 요약을 한 문단으로 작성 (50-100자)"
+  "coach_summary": "..." // 1~2문장, 오늘 연습의 핵심 + 부드럽게 격려
 }
 
 규칙:
-- focus는 3개 항목으로, 각각 구체적인 기술 포인트여야 합니다.
-- routine_items는 3개 항목으로, 각각 구체적인 연습 방법과 횟수/시간을 포함해야 합니다.
-- coach_summary는 한 문단으로, 오늘 가장 중요한 한 가지를 강조해야 합니다.
-- 모든 텍스트는 한글로 작성해 주세요.
-- 이모티콘은 사용하지 마세요.`;
+- 한국어 존댓말, 차분한 전문가 톤
+- focus는 3개, 각 15자 내외, "~하기/~유지" 형태
+- routine_items는 3개, 숫자(회/분) 포함, "동작 + 횟수/시간 + (키포인트)" 형식
+- coach_summary는 1~2문장, 오늘의 테마 + 격려
+- 이모티콘/기타 텍스트 금지, JSON만 반환
+`;
 
-  try {
-    const response = await callClaudeAPI(prompt, {
-      max_tokens: 800,
-      temperature: 0.7
-    });
+  const fallback = {
+    focus: ['피니시 균형 유지하기', '다운스윙 리듬 3:1 맞추기', '머리 흔들림 최소화하기'],
+    routine_items: [
+      '드라이버 빈스윙 15회 (피니시 3초 정지)',
+      '7번 아이언 템포 3:1 스윙 20회',
+      '하체 스트레칭 10분 (골반 회전 준비)'
+    ],
+    coach_summary: '오늘은 피니시 균형과 템포를 정돈해 보세요. 이미 리듬이 안정적이니 한 가지 포인트만 집중하시면 좋겠습니다.'
+  };
 
-    // JSON 파싱 시도
-    let trainingData;
+  const parseJson = (raw) => {
+    // 코드블록 제거
+    const jsonMatch = raw.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || raw.match(/(\{[\s\S]*\})/);
+    const jsonStr = jsonMatch ? jsonMatch[1] : raw;
+    return JSON.parse(jsonStr);
+  };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      // JSON 코드 블록 제거 (```json ... ```)
-      const jsonMatch = response.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || response.match(/(\{[\s\S]*\})/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : response;
-      trainingData = JSON.parse(jsonStr);
-    } catch (parseError) {
-      console.error('[generateTrainingData] JSON 파싱 실패, fallback 사용:', parseError);
-      // 파싱 실패 시 기본값 반환
-      trainingData = {
-        focus: [
-          '피니시 균형 유지',
-          '템포 리듬 개선',
-          '체중 이동 연습'
-        ],
-        routine_items: [
-          '빈스윙 15회 (피니시 3초 정지)',
-          '아이언 스윙 30회',
-          '스트레칭 10분 + 셋업 루틴 10회'
-        ],
-        coach_summary: '오늘은 스윙의 기본 자세와 리듬에 집중해 보세요.'
-      };
-    }
+      const llmText = await callClaudeWithSystem(HIGH_CLASS_SYSTEM_PROMPT, userPrompt, {
+        max_tokens: 600,
+        temperature: 0.35
+      });
 
-    // 필드 검증 및 기본값 설정
-    if (!Array.isArray(trainingData.focus) || trainingData.focus.length === 0) {
-      trainingData.focus = ['피니시 균형 유지', '템포 리듬 개선', '체중 이동 연습'];
-    }
-    if (!Array.isArray(trainingData.routine_items) || trainingData.routine_items.length === 0) {
-      trainingData.routine_items = [
-        '빈스윙 15회 (피니시 3초 정지)',
-        '아이언 스윙 30회',
-        '스트레칭 10분 + 셋업 루틴 10회'
-      ];
-    }
-    if (!trainingData.coach_summary || typeof trainingData.coach_summary !== 'string') {
-      trainingData.coach_summary = '오늘은 스윙의 기본 자세와 리듬에 집중해 보세요.';
-    }
+      const parsed = parseJson(llmText || '');
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('parsed is not object');
+      }
 
-    return trainingData;
-  } catch (error) {
-    console.error('[generateTrainingData] 오류:', error);
-    // 에러 발생 시 기본값 반환
-    return {
-      focus: [
-        '피니시 균형 유지',
-        '템포 리듬 개선',
-        '체중 이동 연습'
-      ],
-      routine_items: [
-        '빈스윙 15회 (피니시 3초 정지)',
-        '아이언 스윙 30회',
-        '스트레칭 10분 + 셋업 루틴 10회'
-      ],
-      coach_summary: '오늘은 스윙의 기본 자세와 리듬에 집중해 보세요.'
-    };
+      const focusArr = Array.isArray(parsed.focus) ? parsed.focus : [];
+      const routineArr = Array.isArray(parsed.routine_items) ? parsed.routine_items : [];
+      const summary = typeof parsed.coach_summary === 'string' ? parsed.coach_summary.trim() : '';
+
+      if (focusArr.length === 3 && routineArr.length === 3 && summary) {
+        return {
+          focus: focusArr.map((v) => String(v).trim()).filter(Boolean),
+          routine_items: routineArr.map((v) => String(v).trim()).filter(Boolean),
+          coach_summary: summary
+        };
+      }
+    } catch (err) {
+      console.warn(`[generateTrainingData] attempt ${attempt + 1} failed:`, err.message);
+    }
   }
+
+  return fallback;
 }
 
 module.exports = {
   testConnection,
   callClaudeAPI,
+  callClaudeWithSystem,
   generateCoaching,
   logAICoaching,
   logPerformance,
