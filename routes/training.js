@@ -5,6 +5,54 @@ const auth = require('../middlewares/auth');
 const trainingPlanService = require('../services/trainingPlanService');
 const { generateTrainingData } = require('../services/aiCoachingService');
 
+// POST /v1/training-sessions (루틴 완료 기록)
+router.post('/training-sessions', auth, async (req, res) => {
+  const userId = req.user.id;
+  const { swing_id, completed_items, total_items } = req.body || {};
+
+  // 기본 검증
+  const swingIdNum = Number(swing_id);
+  if (!swing_id || Number.isNaN(swingIdNum) || swingIdNum <= 0) {
+    return res.status(400).json({ error: 'swing_id is required' });
+  }
+  if (!Array.isArray(completed_items) || completed_items.length === 0) {
+    return res.status(400).json({ error: 'completed_items must be a non-empty array' });
+  }
+  const totalItemsNum = Number(total_items ?? completed_items.length);
+  if (Number.isNaN(totalItemsNum) || totalItemsNum <= 0) {
+    return res.status(400).json({ error: 'total_items must be a positive number' });
+  }
+
+  try {
+    // 스윙 소유 확인
+    const [swingRows] = await pool.query(
+      'SELECT id FROM swings WHERE id = ? AND user_id = ?',
+      [swingIdNum, userId]
+    );
+    if (swingRows.length === 0) {
+      return res.status(404).json({ error: 'Swing not found' });
+    }
+
+    // 테이블 이름: training_session_logs (기존 training_sessions 충돌 회피)
+    await pool.query(
+      `INSERT INTO training_session_logs
+       (user_id, swing_id, completed_items, total_items, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NOW(), NOW())`,
+      [
+        userId,
+        swingIdNum,
+        JSON.stringify(completed_items.map((t) => String(t).trim()).filter(Boolean)),
+        totalItemsNum
+      ]
+    );
+
+    return res.status(201).json({ success: true });
+  } catch (err) {
+    console.error('POST /v1/training-sessions error:', err);
+    return res.status(500).json({ error: 'Failed to save training session' });
+  }
+});
+
 // POST /v1/training-plans
 router.post('/training-plans', auth, async (req, res) => {
   const userId = req.user.id;
