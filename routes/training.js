@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db');
 const auth = require('../middlewares/auth');
 const trainingPlanService = require('../services/trainingPlanService');
+const { generateTrainingData } = require('../services/aiCoachingService');
 
 // POST /v1/training-plans
 router.post('/training-plans', auth, async (req, res) => {
@@ -232,6 +233,78 @@ router.get('/training-plans/:planId/progress', auth, async (req, res) => {
   } catch (err) {
     console.error('GET /training-plans/:planId/progress error:', err);
     return res.status(500).json({ error: 'Failed to load progress' });
+  }
+});
+
+// GET /v1/swings/:id/training
+router.get('/swings/:id/training', auth, async (req, res) => {
+  const userId = req.user.id;
+  const swingId = Number(req.params.id);
+
+  try {
+    // 1) 스윙 소유 확인
+    const [swingRows] = await pool.query(
+      'SELECT id, comment FROM swings WHERE id = ? AND user_id = ?',
+      [swingId, userId]
+    );
+
+    if (swingRows.length === 0) {
+      return res.status(404).json({ error: 'Swing not found' });
+    }
+
+    const swing = swingRows[0];
+
+    // 2) DB에 training 데이터가 있는지 확인
+    const [trainingRows] = await pool.query(
+      'SELECT id, focus, routine_items, coach_summary FROM swing_training WHERE swing_id = ?',
+      [swingId]
+    );
+
+    // 3) 있으면 그대로 반환
+    if (trainingRows.length > 0) {
+      const training = trainingRows[0];
+      return res.json({
+        focus: JSON.parse(training.focus || '[]'),
+        routine_items: JSON.parse(training.routine_items || '[]'),
+        coach_summary: training.coach_summary || ''
+      });
+    }
+
+    // 4) 없으면 AI로 생성
+    if (!swing.comment || swing.comment.trim().length === 0) {
+      return res.status(400).json({ 
+        error: '스윙 코멘트가 없어 트레이닝 데이터를 생성할 수 없습니다.' 
+      });
+    }
+
+    console.log(`[Training] AI 트레이닝 데이터 생성 시작, swingId: ${swingId}`);
+    const trainingData = await generateTrainingData(swing.comment);
+
+    // 5) DB에 저장
+    await pool.query(
+      `INSERT INTO swing_training 
+       (swing_id, focus, routine_items, coach_summary, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NOW(), NOW())`,
+      [
+        swingId,
+        JSON.stringify(trainingData.focus || []),
+        JSON.stringify(trainingData.routine_items || []),
+        trainingData.coach_summary || ''
+      ]
+    );
+
+    console.log(`[Training] 트레이닝 데이터 저장 완료, swingId: ${swingId}`);
+
+    // 6) 반환
+    return res.json({
+      focus: trainingData.focus,
+      routine_items: trainingData.routine_items,
+      coach_summary: trainingData.coach_summary
+    });
+
+  } catch (err) {
+    console.error('GET /swings/:id/training error:', err);
+    return res.status(500).json({ error: 'Failed to load training data' });
   }
 });
 

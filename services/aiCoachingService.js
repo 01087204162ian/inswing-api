@@ -497,6 +497,111 @@ function getFocusTag(metrics = {}) {
   return '리듬 유지';
 }
 
+/**
+ * 스윙 코멘트 기반 트레이닝 데이터 생성
+ * @param {string} comment - 스윙 분석 코멘트
+ * @returns {Promise<{focus: string[], routine_items: string[], coach_summary: string}>}
+ */
+async function generateTrainingData(comment) {
+  if (!comment || comment.trim().length === 0) {
+    throw new Error('comment가 필요합니다.');
+  }
+
+  const prompt = `다음은 골프 스윙 분석 코멘트입니다:
+
+"${comment}"
+
+이 코멘트를 바탕으로, 오늘 연습장에서 집중할 수 있는 **구체적이고 실천 가능한** 트레이닝 계획을 만들어 주세요.
+
+응답 형식은 반드시 다음 JSON 형식으로만 작성해 주세요 (다른 설명 없이 JSON만):
+
+{
+  "focus": [
+    "첫 번째 집중 포인트 (예: 피니시 균형 유지)",
+    "두 번째 집중 포인트 (예: 템포 3:1 리듬 만들기)",
+    "세 번째 집중 포인트 (예: 상체 고정 & 체중 이동)"
+  ],
+  "routine_items": [
+    "첫 번째 연습 루틴 (예: 드라이버 빈스윙 15회 (피니시 3초 정지))",
+    "두 번째 연습 루틴 (예: 7번 아이언 템포 3:1 8회 30초)",
+    "세 번째 연습 루틴 (예: 어택 스트레칭 10분 + 샷 루틴 10회)"
+  ],
+  "coach_summary": "오늘의 핵심 코칭 요약을 한 문단으로 작성 (50-100자)"
+}
+
+규칙:
+- focus는 3개 항목으로, 각각 구체적인 기술 포인트여야 합니다.
+- routine_items는 3개 항목으로, 각각 구체적인 연습 방법과 횟수/시간을 포함해야 합니다.
+- coach_summary는 한 문단으로, 오늘 가장 중요한 한 가지를 강조해야 합니다.
+- 모든 텍스트는 한글로 작성해 주세요.
+- 이모티콘은 사용하지 마세요.`;
+
+  try {
+    const response = await callClaudeAPI(prompt, {
+      max_tokens: 800,
+      temperature: 0.7
+    });
+
+    // JSON 파싱 시도
+    let trainingData;
+    try {
+      // JSON 코드 블록 제거 (```json ... ```)
+      const jsonMatch = response.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || response.match(/(\{[\s\S]*\})/);
+      const jsonStr = jsonMatch ? jsonMatch[1] : response;
+      trainingData = JSON.parse(jsonStr);
+    } catch (parseError) {
+      console.error('[generateTrainingData] JSON 파싱 실패, fallback 사용:', parseError);
+      // 파싱 실패 시 기본값 반환
+      trainingData = {
+        focus: [
+          '피니시 균형 유지',
+          '템포 리듬 개선',
+          '체중 이동 연습'
+        ],
+        routine_items: [
+          '빈스윙 15회 (피니시 3초 정지)',
+          '아이언 스윙 30회',
+          '스트레칭 10분 + 셋업 루틴 10회'
+        ],
+        coach_summary: '오늘은 스윙의 기본 자세와 리듬에 집중해 보세요.'
+      };
+    }
+
+    // 필드 검증 및 기본값 설정
+    if (!Array.isArray(trainingData.focus) || trainingData.focus.length === 0) {
+      trainingData.focus = ['피니시 균형 유지', '템포 리듬 개선', '체중 이동 연습'];
+    }
+    if (!Array.isArray(trainingData.routine_items) || trainingData.routine_items.length === 0) {
+      trainingData.routine_items = [
+        '빈스윙 15회 (피니시 3초 정지)',
+        '아이언 스윙 30회',
+        '스트레칭 10분 + 셋업 루틴 10회'
+      ];
+    }
+    if (!trainingData.coach_summary || typeof trainingData.coach_summary !== 'string') {
+      trainingData.coach_summary = '오늘은 스윙의 기본 자세와 리듬에 집중해 보세요.';
+    }
+
+    return trainingData;
+  } catch (error) {
+    console.error('[generateTrainingData] 오류:', error);
+    // 에러 발생 시 기본값 반환
+    return {
+      focus: [
+        '피니시 균형 유지',
+        '템포 리듬 개선',
+        '체중 이동 연습'
+      ],
+      routine_items: [
+        '빈스윙 15회 (피니시 3초 정지)',
+        '아이언 스윙 30회',
+        '스트레칭 10분 + 셋업 루틴 10회'
+      ],
+      coach_summary: '오늘은 스윙의 기본 자세와 리듬에 집중해 보세요.'
+    };
+  }
+}
+
 module.exports = {
   testConnection,
   callClaudeAPI,
@@ -505,6 +610,7 @@ module.exports = {
   logPerformance,
   getFocusTag,
   calculateChange,
-  getCompareTag
+  getCompareTag,
+  generateTrainingData
 };
 
