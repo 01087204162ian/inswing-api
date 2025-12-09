@@ -53,6 +53,53 @@ router.post('/training-sessions', auth, async (req, res) => {
   }
 });
 
+// GET /v1/swings/:id/training-logs
+router.get('/swings/:id/training-logs', auth, async (req, res) => {
+  const userId = req.user.id;
+  const swingId = Number(req.params.id);
+
+  if (Number.isNaN(swingId) || swingId <= 0) {
+    return res.status(400).json({ error: 'Invalid swing_id' });
+  }
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, swing_id, completed_items, total_items, created_at
+       FROM training_session_logs
+       WHERE user_id = ? AND swing_id = ?
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [userId, swingId]
+    );
+
+    const logs = rows.map((row) => {
+      let completed = [];
+      try {
+        completed = JSON.parse(row.completed_items || '[]');
+      } catch (err) {
+        completed = [];
+      }
+      return {
+        id: row.id,
+        swing_id: row.swing_id,
+        completed_items: completed,
+        total_items: row.total_items,
+        created_at: row.created_at
+      };
+    });
+
+    console.log(`[API] GET /v1/swings/${swingId}/training-logs 호출 완료 (count=${logs.length})`);
+
+    return res.json({
+      count: logs.length,
+      logs
+    });
+  } catch (err) {
+    console.error('GET /v1/swings/:id/training-logs error:', err);
+    return res.status(500).json({ error: 'Failed to load training logs' });
+  }
+});
+
 // POST /v1/training-plans
 router.post('/training-plans', auth, async (req, res) => {
   const userId = req.user.id;
