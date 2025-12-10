@@ -18,23 +18,13 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
   try {
     // swings 소유 여부 검증
     const [swingRows] = await pool.query(
-      'SELECT id, user_id, club_type, shot_side, created_at, metrics FROM swings WHERE id = ? AND user_id = ?',
+      'SELECT id, user_id, club_type, shot_side, created_at FROM swings WHERE id = ? AND user_id = ?',
       [swingId, userId]
     );
     if (swingRows.length === 0) {
       return res.status(404).json({ error: 'Swing not found' });
     }
     const swingRow = swingRows[0];
-
-    // 스윙 메트릭 로드 (가능하면 포함)
-    let metrics = null;
-    if (swingRow.metrics) {
-      try {
-        metrics = JSON.parse(swingRow.metrics);
-      } catch (err) {
-        metrics = null;
-      }
-    }
 
     // 질문 저장
     const [result] = await pool.query(
@@ -48,7 +38,7 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
     if (target === 'ai') {
       const analysis = {
         swing: swingRow,
-        metrics
+        metrics: null // 현재 DB에 metrics 컬럼이 없으므로 null로 처리
       };
 
       const prompt = buildQuestionPrompt({ question, analysis });
