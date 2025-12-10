@@ -3,7 +3,8 @@ const router = express.Router();
 const pool = require('../db');
 const auth = require('../middlewares/auth');
 const trainingPlanService = require('../services/trainingPlanService');
-const { generateTrainingData } = require('../services/aiCoachingService');
+const { callClaudeAPI, generateTrainingData } = require('../services/aiCoachingService');
+const { buildTrainingPrompt } = require('../services/coachPrompt');
 
 // POST /v1/training-sessions (루틴 완료 기록)
 router.post('/training-sessions', auth, async (req, res) => {
@@ -339,7 +340,7 @@ router.get('/swings/:id/training', auth, async (req, res) => {
   try {
     // 1) 스윙 소유 확인
     const [swingRows] = await pool.query(
-      'SELECT id, comment FROM swings WHERE id = ? AND user_id = ?',
+      'SELECT id, comment, club_type, shot_side, created_at, metrics FROM swings WHERE id = ? AND user_id = ?',
       [swingId, userId]
     );
 
@@ -367,13 +368,48 @@ router.get('/swings/:id/training', auth, async (req, res) => {
 
     // 4) 없으면 AI로 생성
     if (!swing.comment || swing.comment.trim().length === 0) {
-      return res.status(400).json({ 
-        error: '스윙 코멘트가 없어 트레이닝 데이터를 생성할 수 없습니다.' 
+      return res.status(400).json({
+        error: '스윙 코멘트가 없어 트레이닝 데이터를 생성할 수 없습니다.'
       });
     }
 
+    let metrics = null;
+    if (swing.metrics) {
+      try {
+        metrics = JSON.parse(swing.metrics);
+      } catch (err) {
+        metrics = null;
+      }
+    }
+
+    const analysis = {
+      swing,
+      metrics
+    };
+
     console.log(`[Training] AI 트레이닝 데이터 생성 시작, swingId: ${swingId}`);
-    const trainingData = await generateTrainingData(swing.comment);
+
+    let trainingData = null;
+    try {
+      const prompt = buildTrainingPrompt({ analysis });
+      const aiJsonText = await callClaudeAPI(prompt, {
+        max_tokens: 800,
+        temperature: 0.35
+      });
+
+      // JSON 파싱
+      const parsed = JSON.parse(aiJsonText);
+      trainingData = {
+        focus: Array.isArray(parsed.focus) ? parsed.focus.map((v) => String(v).trim()).filter(Boolean) : [],
+        routine_items: Array.isArray(parsed.routine_items)
+          ? parsed.routine_items.map((v) => String(v).trim()).filter(Boolean)
+          : [],
+        coach_summary: typeof parsed.coach_summary === 'string' ? parsed.coach_summary.trim() : ''
+      };
+    } catch (err) {
+      console.warn('[Training] 프롬프트 기반 생성 실패, fallback 사용:', err.message);
+      trainingData = await generateTrainingData(swing.comment);
+    }
 
     // 5) DB에 저장
     await pool.query(

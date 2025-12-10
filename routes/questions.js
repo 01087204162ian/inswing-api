@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router({ mergeParams: true });
 const pool = require('../db');
 const auth = require('../middlewares/auth');
-const aiCoachService = require('../services/aiCoachService');
+const { callClaudeAPI } = require('../services/aiCoachingService');
+const { buildQuestionPrompt } = require('../services/coachPrompt');
 
 // POST /v1/swings/:swingId/questions
 router.post('/swings/:swingId/questions', auth, async (req, res) => {
@@ -17,11 +18,22 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
   try {
     // swings 소유 여부 검증
     const [swingRows] = await pool.query(
-      'SELECT id FROM swings WHERE id = ? AND user_id = ?',
+      'SELECT id, user_id, club_type, shot_side, created_at, metrics FROM swings WHERE id = ? AND user_id = ?',
       [swingId, userId]
     );
     if (swingRows.length === 0) {
       return res.status(404).json({ error: 'Swing not found' });
+    }
+    const swingRow = swingRows[0];
+
+    // 스윙 메트릭 로드 (가능하면 포함)
+    let metrics = null;
+    if (swingRow.metrics) {
+      try {
+        metrics = JSON.parse(swingRow.metrics);
+      } catch (err) {
+        metrics = null;
+      }
     }
 
     // 질문 저장
@@ -34,34 +46,23 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
 
     // AI 타겟인 경우, 즉시 답변 생성
     if (target === 'ai') {
-      // 프로필, 분석 결과 로드 (분석 결과는 나중에 연동)
-      const [profileRows] = await pool.query(
-        'SELECT experience_years, avg_score, main_environment, goal, practice_frequency, preferred_style FROM user_profiles WHERE user_id = ?',
-        [userId]
-      );
-      const userProfile = profileRows[0] || null;
+      const analysis = {
+        swing: swingRow,
+        metrics
+      };
 
-      // TODO: swing_analysis는 swings 테이블/별도 테이블에서 가져오기
-      const swingAnalysis = null;
+      const prompt = buildQuestionPrompt({ question, analysis });
 
-      const aiAnswer = await aiCoachService.generateCoachingAnswer({
-        userProfile,
-        swingAnalysis,
-        questionText: question
+      const aiText = await callClaudeAPI(prompt, {
+        max_tokens: 700,
+        temperature: 0.35
       });
 
       await pool.query(
         `INSERT INTO swing_answers
          (question_id, answer_source, cause_text, solution_text, feel_image, drill_text, encouragement)
-         VALUES (?, 'ai', ?, ?, ?, ?, ?)`,
-        [
-          questionId,
-          aiAnswer.cause_text,
-          aiAnswer.solution_text,
-          aiAnswer.feel_image,
-          aiAnswer.drill_text,
-          aiAnswer.encouragement
-        ]
+         VALUES (?, 'ai', ?, NULL, NULL, NULL, NULL)`,
+        [questionId, aiText || '']
       );
 
       await pool.query(
@@ -73,7 +74,10 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
         question_id: questionId,
         target,
         status: 'answered',
-        answer: aiAnswer
+        answer: {
+          source: 'ai',
+          text: aiText
+        }
       });
     }
 
