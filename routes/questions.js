@@ -66,7 +66,11 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
         status: 'answered',
         answer: {
           source: 'ai',
-          text: aiText
+          text: aiText,
+          cause: aiText,
+          solution: aiText,
+          drill: '',
+          encouragement: ''
         }
       });
     }
