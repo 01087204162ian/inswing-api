@@ -51,8 +51,8 @@ router.post('/swings/:swingId/questions', auth, async (req, res) => {
       await pool.query(
         `INSERT INTO swing_answers
          (question_id, answer_source, cause_text, solution_text, feel_image, drill_text, encouragement)
-         VALUES (?, 'ai', ?, NULL, NULL, NULL, NULL)`,
-        [questionId, aiText || '']
+         VALUES (?, 'ai', ?, ?, '', '', '')`,
+        [questionId, aiText || '', aiText || '']
       );
 
       await pool.query(
