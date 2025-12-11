@@ -123,9 +123,34 @@ ${summary}
 `.trim();
 }
 
+// 한 줄 요약 프롬프트
+function buildSummaryPrompt({ analysis, feeling }) {
+  const summary = buildAnalysisSummary(analysis);
+  const feelingNote = feeling?.note ? `\n[선수 메모]\n- ${feeling.note}` : '';
+
+  return `
+당신은 INSwing의 하이 클래스 골프 코치입니다.
+불필요한 인사 없이 바로 핵심을 한 문장으로 정리하세요.
+프로 경기 해설자 + 투어 코치 톤으로, 단정하고 확신 있게 마무리합니다.
+
+[요약 목적]
+- 이번 스윙의 핵심 교정 포인트를 1~2개로 압축
+- 무엇을 느끼고 어떻게 움직여야 하는지 간결하게 제시
+- 한 문장(120자 이내)으로만 작성
+
+[스윙 분석 요약]
+${summary}
+${feelingNote}
+
+[출력 형식]
+- 한 문장 코칭 요약 (불릿/번호 없이 서술문)
+`.trim();
+}
+
 module.exports = {
   buildQuestionPrompt,
-  buildTrainingPrompt
+  buildTrainingPrompt,
+  buildSummaryPrompt
 };
 
 console.log('[CoachPrompt] 하이 클래스 코치 프롬프트 적용 완료');

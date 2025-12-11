@@ -8,7 +8,8 @@ const FormData = require('form-data');
 const db = require('../db');
 const { s3Client, Upload } = require('../config/s3');
 const { generateSwingComment } = require('../services/commentService');
-const { generateCoaching, getFocusTag, calculateChange, getCompareTag } = require('../services/aiCoachingService');
+const { generateCoaching, getFocusTag, calculateChange, getCompareTag, callClaudeAPI } = require('../services/aiCoachingService');
+const { buildSummaryPrompt } = require('../services/coachPrompt');
 
 const router = express.Router();
 
@@ -511,6 +512,30 @@ router.get('/:id', async (req, res, next) => {
     // 핵심 포인트 태그 생성
     const focusTag = getFocusTag(metrics);
 
+    // 한 줄 요약 생성 (LLM, 120자 이내)
+    let summary = null;
+    try {
+      const analysis = {
+        swing: {
+          club_type: row.club_type,
+          shot_side: row.shot_side,
+          created_at: row.created_at
+        },
+        metrics
+      };
+      const prompt = buildSummaryPrompt({ analysis, feeling });
+      const text = await callClaudeAPI(prompt, { max_tokens: 160, temperature: 0.3 });
+      if (text) {
+        summary = text.trim();
+        if (summary.length > 120) {
+          summary = summary.slice(0, 120).trim();
+        }
+      }
+    } catch (err) {
+      console.warn('[Swings] summary 생성 실패 (무시):', err.message);
+      summary = comment ? String(comment).slice(0, 120).trim() : null;
+    }
+
     return res.json({
       ok: true,
       swing: {
@@ -523,6 +548,7 @@ router.get('/:id', async (req, res, next) => {
       metrics,
       feeling,
       comment,
+      summary,
       focus_tag: focusTag
     });
   } catch (err) {
