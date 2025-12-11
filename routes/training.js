@@ -54,7 +54,7 @@ router.post('/training-sessions', auth, async (req, res) => {
   }
 });
 
-// GET /v1/swings/:id/training-logs
+// GET /v1/swings/:id/training-logsdd
 router.get('/swings/:id/training-logs', auth, async (req, res) => {
   const userId = req.user.id;
   const swingId = Number(req.params.id);
