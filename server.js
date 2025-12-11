@@ -49,6 +49,8 @@ app.use('/auth', authRoutes);
 
 // /swings/* → JWT 인증 필요
 app.use('/swings', authMiddleware, swingRoutes);
+// /v1/swings/* → 동일 핸들러 재사용 (CORS/인증 동일)
+app.use('/v1/swings', authMiddleware, swingRoutes);
 
 // /swings/:id/feeling → JWT 인증 필요
 app.use('/swings', authMiddleware, feelingRoutes);
@@ -70,4 +72,5 @@ app.use(errorHandler);
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`INSWING API server running on http://localhost:${PORT}`);
+  console.log('[API] /v1/swings/:id 라우트 alias 설정 완료');
 });
