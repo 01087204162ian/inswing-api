@@ -340,7 +340,7 @@ router.get('/swings/:id/training', auth, async (req, res) => {
   try {
     // 1) 스윙 소유 확인
     const [swingRows] = await pool.query(
-      'SELECT id, comment, club_type, shot_side, created_at, metrics FROM swings WHERE id = ? AND user_id = ?',
+      'SELECT id, comment, club_type, shot_side, created_at FROM swings WHERE id = ? AND user_id = ?',
       [swingId, userId]
     );
 
@@ -373,18 +373,9 @@ router.get('/swings/:id/training', auth, async (req, res) => {
       });
     }
 
-    let metrics = null;
-    if (swing.metrics) {
-      try {
-        metrics = JSON.parse(swing.metrics);
-      } catch (err) {
-        metrics = null;
-      }
-    }
-
     const analysis = {
       swing,
-      metrics
+      metrics: null
     };
 
     console.log(`[Training] AI 트레이닝 데이터 생성 시작, swingId: ${swingId}`);
