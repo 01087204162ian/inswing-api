@@ -817,15 +817,16 @@ router.post('/:id/questions', async (req, res, next) => {
 
       // 9) 응답 반환
       if (status === 'answered') {
-        // 답변 객체 형태로 반환 (swing_answers 구조에 맞춤)
+        // 답변 객체 형태로 반환 (프론트엔드 호환성을 위해 text 필드 추가)
         return res.json({
           ok: true,
           question_id: questionId,
           swing_id: swingId,
           question: trimmedQuestion,
           answer: {
+            text: answerText,  // 프론트엔드가 우선 사용
             source: 'ai',
-            cause: answerText,
+            cause: answerText,  // DB 저장용 (swing_answers 테이블 구조 호환)
             solution: answerText,
             feel_image: null,
             drill: null,
