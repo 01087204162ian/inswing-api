@@ -782,7 +782,7 @@ router.post('/:id/questions', async (req, res, next) => {
 
       try {
         const aiResponse = await callClaudeAPI(prompt, {
-          max_tokens: 480,
+          max_tokens: 1000,  // 답변이 길어질 수 있으므로 충분한 토큰 제공
           temperature: 0.4
         });
 
