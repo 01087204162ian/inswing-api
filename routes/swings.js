@@ -9,7 +9,7 @@ const db = require('../db');
 const { s3Client, Upload } = require('../config/s3');
 const { generateSwingComment } = require('../services/commentService');
 const { generateCoaching, getFocusTag, calculateChange, getCompareTag, callClaudeAPI } = require('../services/aiCoachingService');
-const { buildSummaryPrompt } = require('../services/coachPrompt');
+const { buildSummaryPrompt, buildQuestionPrompt } = require('../services/coachPrompt');
 
 const router = express.Router();
 
@@ -677,6 +677,119 @@ router.get('/', async (req, res, next) => {
     return res.json({ ok: true, swings, user_name: userName });
   } catch (err) {
     err.clientMessage = '스윙 히스토리를 불러오는 중 오류가 발생했습니다.';
+    return next(err);
+  }
+});
+
+// 🔥 질문 코칭 API
+router.post('/:id/questions', async (req, res, next) => {
+  try {
+    const swingId = parseInt(req.params.id, 10);
+    const userId = req.user.id;
+    const { question } = req.body || {};
+
+    // 1) 기본 검증
+    if (!swingId || Number.isNaN(swingId)) {
+      return res.status(400).json({ ok: false, error: '유효하지 않은 스윙 ID입니다.' });
+    }
+
+    if (!question || typeof question !== 'string' || !question.trim()) {
+      return res.status(400).json({ ok: false, error: '질문 내용을 입력해 주세요.' });
+    }
+
+    const trimmedQuestion = question.trim();
+
+    // 2) 스윙 + 메트릭 조회 (본인 것만)
+    const [rows] = await db.query(
+      `
+      SELECT
+        s.id,
+        s.user_id,
+        s.club_type,
+        s.shot_side,
+        s.created_at,
+        m.backswing_angle,
+        m.impact_speed,
+        m.follow_through_angle,
+        m.balance_score,
+        m.tempo_ratio,
+        m.backswing_time_sec,
+        m.downswing_time_sec,
+        m.head_movement_pct,
+        m.shoulder_rotation_range,
+        m.hip_rotation_range,
+        m.rotation_efficiency,
+        m.overall_score
+      FROM swings s
+      LEFT JOIN metrics m ON m.swing_id = s.id
+      WHERE s.id = ? AND s.user_id = ?
+      `,
+      [swingId, userId]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ ok: false, error: '스윙을 찾을 수 없습니다.' });
+    }
+
+    const row = rows[0];
+
+    // 3) analysis 객체 구성 (프롬프트용)
+    const metrics = {
+      backswing_angle: row.backswing_angle,
+      impact_speed: row.impact_speed,
+      follow_through_angle: row.follow_through_angle,
+      balance_score: row.balance_score,
+      tempo_ratio: row.tempo_ratio,
+      backswing_time_sec: row.backswing_time_sec,
+      downswing_time_sec: row.downswing_time_sec,
+      head_movement_pct: row.head_movement_pct,
+      shoulder_rotation_range: row.shoulder_rotation_range,
+      hip_rotation_range: row.hip_rotation_range,
+      rotation_efficiency: row.rotation_efficiency,
+      overall_score: row.overall_score
+    };
+
+    const analysis = {
+      swing: {
+        club_type: row.club_type,
+        shot_side: row.shot_side,
+        created_at: row.created_at
+      },
+      metrics
+    };
+
+    // 4) 하이클래스 코치 프롬프트 생성
+    const prompt = buildQuestionPrompt({
+      question: trimmedQuestion,
+      analysis
+    });
+
+    // 5) Claude API 호출
+    const answerText = await callClaudeAPI(prompt, {
+      max_tokens: 480,
+      temperature: 0.4
+    });
+
+    const answer = (answerText || '').trim();
+
+    if (!answer) {
+      return res.status(500).json({
+        ok: false,
+        error: 'AI 코치 응답이 비어 있습니다. 잠시 후 다시 시도해 주세요.'
+      });
+    }
+
+    // TODO: 필요하면 여기서 swing_questions 테이블에 question/answer 저장
+
+    return res.json({
+      ok: true,
+      swing_id: swingId,
+      question: trimmedQuestion,
+      answer
+    });
+  } catch (err) {
+    console.error('[Swings] 질문 코칭 생성 오류:', err);
+    err.clientMessage = err.clientMessage || '코칭 답변 생성 중 오류가 발생했습니다.';
     return next(err);
   }
 });
