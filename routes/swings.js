@@ -758,38 +758,169 @@ router.post('/:id/questions', async (req, res, next) => {
       metrics
     };
 
-    // 4) 하이클래스 코치 프롬프트 생성
-    const prompt = buildQuestionPrompt({
-      question: trimmedQuestion,
-      analysis
-    });
+    // 4) 질문을 DB에 저장 (status='pending')
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
 
-    // 5) Claude API 호출
-    const answerText = await callClaudeAPI(prompt, {
-      max_tokens: 480,
-      temperature: 0.4
-    });
+    try {
+      const [insertResult] = await connection.query(
+        `INSERT INTO swing_questions (swing_id, user_id, target, question_text, status)
+         VALUES (?, ?, 'ai', ?, 'pending')`,
+        [swingId, userId, trimmedQuestion]
+      );
+      const questionId = insertResult.insertId;
 
-    const answer = (answerText || '').trim();
-
-    if (!answer) {
-      return res.status(500).json({
-        ok: false,
-        error: 'AI 코치 응답이 비어 있습니다. 잠시 후 다시 시도해 주세요.'
+      // 5) 하이클래스 코치 프롬프트 생성
+      const prompt = buildQuestionPrompt({
+        question: trimmedQuestion,
+        analysis
       });
+
+      // 6) Claude API 호출
+      let answerText = null;
+      let status = 'canceled';
+
+      try {
+        const aiResponse = await callClaudeAPI(prompt, {
+          max_tokens: 480,
+          temperature: 0.4
+        });
+
+        answerText = (aiResponse || '').trim();
+        
+        if (answerText) {
+          status = 'answered';
+          
+          // 7) swing_answers 테이블에 답변 저장
+          await connection.query(
+            `INSERT INTO swing_answers 
+             (question_id, answer_source, cause_text, solution_text, feel_image, drill_text, encouragement)
+             VALUES (?, 'ai', ?, ?, NULL, NULL, NULL)`,
+            [questionId, answerText, answerText] // 현재는 동일한 텍스트를 cause와 solution에 저장
+          );
+
+          // 8) swing_questions 상태 업데이트
+          await connection.query(
+            `UPDATE swing_questions 
+             SET status = ?
+             WHERE id = ?`,
+            [status, questionId]
+          );
+        }
+      } catch (llmError) {
+        console.error('[Swings] Claude API 호출 오류:', llmError);
+        // 실패 시 status는 'canceled'로 유지 (업데이트하지 않음)
+      }
+
+      await connection.commit();
+      connection.release();
+
+      // 9) 응답 반환
+      if (status === 'answered') {
+        // 답변 객체 형태로 반환 (swing_answers 구조에 맞춤)
+        return res.json({
+          ok: true,
+          question_id: questionId,
+          swing_id: swingId,
+          question: trimmedQuestion,
+          answer: {
+            source: 'ai',
+            cause: answerText,
+            solution: answerText,
+            feel_image: null,
+            drill: null,
+            encouragement: null
+          },
+          status: 'answered'
+        });
+      } else {
+        return res.status(500).json({
+          ok: false,
+          question_id: questionId,
+          error: 'AI 코치 응답 생성 중 오류가 발생했습니다.'
+        });
+      }
+    } catch (dbError) {
+      await connection.rollback();
+      connection.release();
+      throw dbError;
+    }
+  } catch (err) {
+    console.error('[Swings] 질문 코칭 생성 오류:', err);
+    err.clientMessage = err.clientMessage || '코칭 답변 생성 중 오류가 발생했습니다.';
+    return next(err);
+  }
+});
+
+// 🔥 질문 히스토리 조회 API
+router.get('/:id/questions', async (req, res, next) => {
+  try {
+    const swingId = parseInt(req.params.id, 10);
+    const userId = req.user.id;
+
+    // 1) 기본 검증
+    if (!swingId || Number.isNaN(swingId)) {
+      return res.status(400).json({ ok: false, error: '유효하지 않은 스윙 ID입니다.' });
     }
 
-    // TODO: 필요하면 여기서 swing_questions 테이블에 question/answer 저장
+    // 2) 스윙 소유 확인
+    const [swingRows] = await db.query(
+      'SELECT id FROM swings WHERE id = ? AND user_id = ?',
+      [swingId, userId]
+    );
+
+    if (!swingRows || swingRows.length === 0) {
+      return res.status(404).json({ ok: false, error: '스윙을 찾을 수 없습니다.' });
+    }
+
+    // 3) 질문/답변 히스토리 조회 (swing_answers LEFT JOIN)
+    const [rows] = await db.query(
+      `SELECT 
+         q.id,
+         q.question_text,
+         q.status,
+         q.target,
+         q.created_at,
+         a.id AS answer_id,
+         a.answer_source,
+         a.cause_text,
+         a.solution_text,
+         a.feel_image,
+         a.drill_text,
+         a.encouragement,
+         a.created_at AS answer_created_at
+       FROM swing_questions q
+       LEFT JOIN swing_answers a ON a.question_id = q.id
+       WHERE q.user_id = ? AND q.swing_id = ?
+       ORDER BY q.created_at DESC
+       LIMIT 50`,
+      [userId, swingId]
+    );
 
     return res.json({
       ok: true,
       swing_id: swingId,
-      question: trimmedQuestion,
-      answer
+      questions: rows.map(row => ({
+        id: row.id,
+        question: row.question_text,
+        status: row.status,
+        target: row.target,
+        created_at: row.created_at,
+        answer: row.answer_id ? {
+          id: row.answer_id,
+          source: row.answer_source,
+          cause: row.cause_text,
+          solution: row.solution_text,
+          feel_image: row.feel_image,
+          drill: row.drill_text,
+          encouragement: row.encouragement,
+          created_at: row.answer_created_at
+        } : null
+      }))
     });
   } catch (err) {
-    console.error('[Swings] 질문 코칭 생성 오류:', err);
-    err.clientMessage = err.clientMessage || '코칭 답변 생성 중 오류가 발생했습니다.';
+    console.error('[Swings] 질문 히스토리 조회 오류:', err);
+    err.clientMessage = err.clientMessage || '질문 히스토리를 불러오는 중 오류가 발생했습니다.';
     return next(err);
   }
 });
