@@ -1,8 +1,11 @@
-node_modules/
-.env
-.env.*
-.env.backup*
+﻿node_modules/
 uploads/
 *.log
 logs/
 .DS_Store
+
+# secrets
+.env
+.env.*
+.env.backup*
+!.env.example
